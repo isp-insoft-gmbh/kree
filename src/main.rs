@@ -1,4 +1,5 @@
 mod audio;
+mod editor;
 mod logging;
 mod main_window;
 mod parser;
@@ -138,6 +139,11 @@ async fn run_async(
     Ok(())
 }
 
+fn open_editor() -> Result<()> {
+    let path = paths::reminders_path()?;
+    editor::open(&path)
+}
+
 fn load_reminders() -> Result<Vec<parser::Reminder>> {
     let path = paths::reminders_path()?;
     match std::fs::read_to_string(&path) {
@@ -190,8 +196,9 @@ impl App {
     fn handle_main_window_action(&mut self, action: main_window::MainWindowAction) {
         match action {
             main_window::MainWindowAction::EditReminders => {
-                // step 12 will spawn the editor
-                info!("Edit Reminders clicked (no-op until step 12)");
+                if let Err(e) = open_editor() {
+                    warn!(error = %e, "edit reminders failed");
+                }
             }
             main_window::MainWindowAction::Reload => {
                 match load_reminders() {
@@ -248,10 +255,15 @@ impl eframe::App for App {
         // Drain tray menu events.
         let menu_rx = MenuEvent::receiver();
         while let Ok(menu_event) = menu_rx.try_recv() {
-            if menu_event.id() == &self.tray.quit_id {
+            let id = menu_event.id();
+            if id == &self.tray.quit_id {
                 info!("Quit menu clicked; closing root viewport");
                 self.quitting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if id == &self.tray.edit_id
+                && let Err(e) = open_editor()
+            {
+                warn!(error = %e, "edit reminders failed");
             }
         }
 

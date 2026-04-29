@@ -11,6 +11,7 @@ const TRAY_ICON_BYTES: &[u8] = include_bytes!("../assets/tray-icon.png");
 /// the tray alive for the lifetime of the app.
 pub struct Tray {
     icon: TrayIcon,
+    pub edit_id: MenuId,
     pub quit_id: MenuId,
 }
 
@@ -22,6 +23,12 @@ pub fn build() -> Result<Tray> {
     let icon = Icon::from_rgba(img.into_raw(), width, height).context("building tray Icon")?;
 
     let menu = Menu::new();
+
+    let edit = MenuItem::new("Edit Reminders", true, None);
+    let edit_id = edit.id().clone();
+    menu.append(&edit)
+        .context("appending Edit Reminders menu item")?;
+
     let quit = MenuItem::new("Quit", true, None);
     let quit_id = quit.id().clone();
     menu.append(&quit).context("appending Quit menu item")?;
@@ -35,6 +42,7 @@ pub fn build() -> Result<Tray> {
 
     Ok(Tray {
         icon: tray,
+        edit_id,
         quit_id,
     })
 }
