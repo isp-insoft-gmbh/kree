@@ -22,7 +22,7 @@ All crate choices are deliberate. **Lean on crates aggressively** — custom cod
 
 | Concern | Crate | Notes |
 |---|---|---|
-| Language | Rust stable, edition 2021 | |
+| Language | Rust stable, edition 2024 | |
 | GUI | `eframe` / `egui` | Immediate-mode, ships well as single binary |
 | Tray icon | `tray-icon` | |
 | Cron parsing | `croner` | POSIX 5-field expressions, actively maintained |

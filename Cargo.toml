@@ -1,0 +1,39 @@
+[package]
+name = "kree"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+description = "Cron-scheduled reminders in your Windows tray."
+authors = ["Oliver Krylow <o.krylow@isp-insoft.de>"]
+publish = false
+
+[dependencies]
+# Errors / logging
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Async runtime — used only for scheduler timers + mpsc to UI
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+
+# Cron parsing / file watching / paths / editor
+croner = "3"
+notify-debouncer-mini = "0.7"
+directories = "6"
+edit = { version = "0.1", features = ["better-path", "quoted-env"] }
+
+# GUI / tray / audio / TTS — egui re-exported via eframe::egui
+eframe = "0.34"
+tray-icon = "0.22"
+rodio = "0.22"
+tts = "0.26"
+
+# Windows integration
+single-instance = "0.3"
+auto-launch = "0.6"
+
+# Emoji extraction
+unicode-segmentation = "1"
+unicode-properties = { version = "0.1", features = ["emoji"] }
