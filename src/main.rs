@@ -1,5 +1,6 @@
 mod audio;
 mod logging;
+mod main_window;
 mod parser;
 mod paths;
 mod popup;
@@ -18,6 +19,7 @@ use single_instance::SingleInstance;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tray_icon::menu::MenuEvent;
+use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
 use crate::scheduler::{ReminderEvent, Scheduler};
 
@@ -66,17 +68,14 @@ fn main() -> Result<()> {
         }
     });
 
-    // Hidden, off-screen, undecorated, taskbar-less main viewport. The
-    // root viewport is required by eframe but never shown — popups open
-    // as deferred child viewports. Step 11 will give it a real role
-    // (the kree main window).
+    // Root viewport == the main window (SPEC.md § 5.5). Starts hidden;
+    // a tray left-click toggles visibility. Closing the X hides it
+    // rather than quitting (handled in `App::ui`).
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_visible(false)
-            .with_taskbar(false)
-            .with_decorations(false)
-            .with_inner_size([1.0, 1.0])
-            .with_position([-32000.0, -32000.0]),
+            .with_title("kree")
+            .with_inner_size([main_window::WIDTH, main_window::HEIGHT])
+            .with_visible(false),
         ..Default::default()
     };
 
@@ -162,6 +161,10 @@ struct App {
     tray: tray::Tray,
     ui_rx: mpsc::UnboundedReceiver<UiFire>,
     popups: Vec<popup::PopupHandle>,
+    main_visible: bool,
+    quitting: bool,
+    window_state: main_window::MainWindowState,
+    reminders: Vec<parser::Reminder>,
 }
 
 impl App {
@@ -169,17 +172,65 @@ impl App {
         // Tray must be built on the same thread that pumps Win32 messages
         // (the eframe / winit thread). The creator closure runs there.
         let tray = tray::build()?;
+        let reminders = load_reminders().unwrap_or_else(|e| {
+            warn!(error = %e, "main window: load_reminders failed; starting empty");
+            Vec::new()
+        });
         Ok(Self {
             tray,
             ui_rx,
             popups: Vec::new(),
+            main_visible: false,
+            quitting: false,
+            window_state: main_window::MainWindowState::default(),
+            reminders,
         })
+    }
+
+    fn handle_main_window_action(&mut self, action: main_window::MainWindowAction) {
+        match action {
+            main_window::MainWindowAction::EditReminders => {
+                // step 12 will spawn the editor
+                info!("Edit Reminders clicked (no-op until step 12)");
+            }
+            main_window::MainWindowAction::Reload => {
+                match load_reminders() {
+                    Ok(rs) => {
+                        info!(count = rs.len(), "main window reload");
+                        self.reminders = rs;
+                    }
+                    Err(e) => warn!(error = %e, "reload failed"),
+                }
+                // step 13 will also re-spawn the scheduler
+            }
+            main_window::MainWindowAction::SetPaused(p) => {
+                // step 13/15 will actually pause the scheduler
+                info!(paused = p, "Pause toggled (no-op until step 13)");
+            }
+            main_window::MainWindowAction::SetAutostart(a) => {
+                // step 14 will write/remove HKCU\...\Run via auto-launch
+                info!(autostart = a, "Autostart toggled (no-op until step 14)");
+            }
+        }
     }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+
+        // Close-to-tray: if the user clicked the window's X, swallow the
+        // close and hide instead. Quit menu sets `quitting` first so a
+        // real exit goes through.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.quitting {
+                // Let it close; eframe::run_native will return.
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.main_visible = false;
+            }
+        }
 
         // Drain reminder fires from the tokio side and open popups.
         while let Ok(fire) = self.ui_rx.try_recv() {
@@ -199,7 +250,34 @@ impl eframe::App for App {
         while let Ok(menu_event) = menu_rx.try_recv() {
             if menu_event.id() == &self.tray.quit_id {
                 info!("Quit menu clicked; closing root viewport");
+                self.quitting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+
+        // Drain tray icon click events: left-click toggles main window.
+        let tray_rx = TrayIconEvent::receiver();
+        while let Ok(tray_event) = tray_rx.try_recv() {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = tray_event
+            {
+                self.main_visible = !self.main_visible;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.main_visible));
+                if self.main_visible {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+        }
+
+        // Render the main-window contents only when visible (skipping
+        // the tree when hidden saves a bit of egui work per frame).
+        if self.main_visible {
+            let actions = main_window::render(ui, &mut self.window_state, &self.reminders);
+            for action in actions {
+                self.handle_main_window_action(action);
             }
         }
 
