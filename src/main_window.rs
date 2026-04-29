@@ -5,8 +5,8 @@ use eframe::egui;
 
 use crate::parser::Reminder;
 
-pub const WIDTH: f32 = 760.0;
-pub const HEIGHT: f32 = 480.0;
+pub const WIDTH: f32 = 980.0;
+pub const HEIGHT: f32 = 620.0;
 
 #[derive(Default)]
 pub struct MainWindowState {
@@ -32,9 +32,22 @@ pub fn render(
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
             ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
 
-            ui.heading(egui::RichText::new("kree").size(22.0));
-            ui.label(egui::RichText::new("Cron-scheduled reminders.").weak());
-            ui.add_space(12.0);
+            // Explicit heading colour — egui's default heading color
+            // resolves to `widgets.noninteractive.fg_stroke.color`, which
+            // is `ui.normal` (#dbdbdb) and reads as muted on the dark
+            // chrome. Use `ui.important_global` (#f3effb) for headings.
+            ui.label(
+                egui::RichText::new("kree")
+                    .size(28.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(0xf3, 0xef, 0xfb)),
+            );
+            ui.label(
+                egui::RichText::new("Cron-scheduled reminders.")
+                    .size(13.0)
+                    .color(egui::Color32::from_rgb(0x9d, 0x9d, 0x9d)),
+            );
+            ui.add_space(14.0);
 
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;

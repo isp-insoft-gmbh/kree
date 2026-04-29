@@ -93,6 +93,7 @@ fn main() -> Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("kree")
             .with_inner_size([main_window::WIDTH, main_window::HEIGHT])
+            .with_min_inner_size([480.0, 320.0])
             .with_visible(false),
         ..Default::default()
     };
@@ -101,6 +102,9 @@ fn main() -> Result<()> {
         "kree",
         options,
         Box::new(move |cc| {
+            // Fonts are loaded once (rebuilds the egui font atlas);
+            // visuals + text-styles are re-asserted each frame.
+            theme::install_fonts(&cc.egui_ctx);
             theme::apply(&cc.egui_ctx);
             Ok(Box::new(App::new(
                 cc.egui_ctx.clone(),

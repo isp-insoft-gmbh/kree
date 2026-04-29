@@ -23,7 +23,13 @@
 //! every popup viewport re-applies it inside its closure (each viewport
 //! owns its own egui `Context`).
 
-use eframe::egui::{self, Color32, CornerRadius, Stroke, Visuals};
+use std::sync::Arc;
+
+use eframe::egui::{
+    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
+    Visuals,
+};
+use tracing::{info, warn};
 
 // palette.* (top-level)
 const ERROR: Color32 = Color32::from_rgb(0xe4, 0x64, 0x79);
@@ -43,7 +49,97 @@ const UI_IMPORTANT_GLOBAL: Color32 = Color32::from_rgb(0xf3, 0xef, 0xfb);
 // palette.content (popup body — slightly more contrast than UI chrome)
 const CONTENT_BACKDROP: Color32 = Color32::from_rgb(0x12, 0x12, 0x12);
 
+/// Load broader-coverage fonts from the Windows fonts directory and
+/// register them with egui as fallbacks. egui's default font set
+/// (`Hack` + `NotoEmoji`) misses most modern emoji and any non-Latin
+/// glyphs; Segoe UI + Segoe UI Emoji + Segoe UI Symbol fill the gap on
+/// every Windows 10/11 install. Cascadia is the canonical monospace.
+///
+/// Call once at app startup (font atlas rebuild is non-trivial). Fonts
+/// missing from the system are simply skipped — egui falls back to its
+/// bundled defaults for those slots.
+pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    let candidates: &[(&str, &str)] = &[
+        ("segoe-ui-variable", r"C:\Windows\Fonts\SegUIVar.ttf"),
+        ("segoe-ui", r"C:\Windows\Fonts\segoeui.ttf"),
+        ("cascadia-mono", r"C:\Windows\Fonts\CascadiaMono.ttf"),
+        ("cascadia-code", r"C:\Windows\Fonts\CascadiaCode.ttf"),
+        ("segoe-emoji", r"C:\Windows\Fonts\seguiemj.ttf"),
+        ("segoe-symbol", r"C:\Windows\Fonts\seguisym.ttf"),
+        ("segoe-icons", r"C:\Windows\Fonts\SegoeIcons.ttf"),
+    ];
+
+    let mut loaded = Vec::new();
+    for (name, path) in candidates {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                fonts
+                    .font_data
+                    .insert((*name).into(), Arc::new(FontData::from_owned(bytes)));
+                loaded.push(*name);
+            }
+            Err(e) => warn!(font = name, path, error = %e, "system font missing; skipping"),
+        }
+    }
+    info!(?loaded, "system fonts loaded");
+
+    if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
+        for primary in ["segoe-ui-variable", "segoe-ui"] {
+            if fonts.font_data.contains_key(primary) {
+                family.insert(0, primary.into());
+                break;
+            }
+        }
+        for fallback in ["segoe-icons", "segoe-symbol", "segoe-emoji"] {
+            if fonts.font_data.contains_key(fallback) {
+                family.push(fallback.into());
+            }
+        }
+    }
+    if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
+        for primary in ["cascadia-mono", "cascadia-code"] {
+            if fonts.font_data.contains_key(primary) {
+                family.insert(0, primary.into());
+                break;
+            }
+        }
+        for fallback in ["segoe-icons", "segoe-symbol", "segoe-emoji"] {
+            if fonts.font_data.contains_key(fallback) {
+                family.push(fallback.into());
+            }
+        }
+    }
+
+    ctx.set_fonts(fonts);
+}
+
+fn apply_text_styles(ctx: &egui::Context) {
+    ctx.all_styles_mut(|style| {
+        style.text_styles.insert(
+            TextStyle::Heading,
+            FontId::new(26.0, FontFamily::Proportional),
+        );
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::new(15.0, FontFamily::Proportional));
+        style.text_styles.insert(
+            TextStyle::Button,
+            FontId::new(15.0, FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Monospace,
+            FontId::new(14.0, FontFamily::Monospace),
+        );
+        style.text_styles.insert(
+            TextStyle::Small,
+            FontId::new(12.0, FontFamily::Proportional),
+        );
+    });
+}
+
 pub fn apply(ctx: &egui::Context) {
+    apply_text_styles(ctx);
     let mut v = Visuals::dark();
 
     v.window_fill = UI_BACKDROP;
