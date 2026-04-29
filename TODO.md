@@ -6,12 +6,13 @@ Open follow-ups not covered by the spec or the current commit history.
   ISP Insoft repo, push `main`, switch CI from "windows-latest scratch"
   to the org's standard runner pool if applicable, and replace the
   `../../issues` placeholder in `README.md` with a real link.
-- [ ] **Explore publishing as a winget package.** Investigate
-  [winget-pkgs](https://github.com/microsoft/winget-pkgs) submission
-  flow: manifest format, signing requirements (Authenticode), update
-  cadence, and whether the binary needs a stable installer wrapper
-  (e.g. WiX / NSIS) or whether a portable single-EXE manifest is
-  acceptable.
+- [x] **Explore publishing as a winget package.** Research notes
+  in [`docs/winget-research.md`](docs/winget-research.md). Summary:
+  manifest = 5 YAMLs under `manifests/k/<pub>/<pkg>/<ver>/`,
+  `InstallerType: portable` is accepted (no MSI wrapper), winget
+  itself doesn't require Authenticode (SmartScreen does — separate
+  concern), `wingetcreate update --submit` handles version bumps.
+  Actual submission deferred until kree has a GitHub home.
 - [ ] **Build release binaries in a GitHub Actions workflow.** New
   `.github/workflows/release.yml` triggered on tag (`v*`): builds
   `kree.exe` with `cargo build --release` on `windows-latest`,
