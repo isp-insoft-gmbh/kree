@@ -38,7 +38,7 @@ pub fn build() -> Result<Tray> {
     menu.append(&edit)
         .context("appending Edit Reminders menu item")?;
 
-    let log = MenuItem::new("Open Log", true, None);
+    let log = MenuItem::new("Open Logs Folder", true, None);
     let log_id = log.id().clone();
     menu.append(&log).context("appending Open Log menu item")?;
 

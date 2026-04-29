@@ -213,20 +213,24 @@ fn open_editor() -> Result<()> {
     editor::open(&path)
 }
 
-/// Open the most recent log file in the OS default handler (typically
-/// Notepad on Windows). Falls back to opening the logs directory when
-/// nothing has been written yet.
+/// Open the kree logs directory in Explorer. We deliberately don't try
+/// to open the active log file directly: `tracing-appender` holds it
+/// with an exclusive lock on Windows, so Notepad (and most other
+/// default `.log` handlers) fail with `ERROR_SHARING_VIOLATION`. The
+/// directory view always works, and the user can copy out / open with
+/// a tool that uses shared reads (VS Code, PowerShell `Get-Content`,
+/// etc.).
 fn open_log() -> Result<()> {
-    let target = match paths::latest_log_file()? {
-        Some(p) => p,
-        None => paths::logs_dir()?,
-    };
-    info!(path = %target.display(), "opening log target");
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", target.to_str().unwrap_or("")])
+    let dir = paths::logs_dir()?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        warn!(path = %dir.display(), error = %e, "could not create logs dir; opening anyway");
+    }
+    info!(path = %dir.display(), "opening logs directory");
+    std::process::Command::new("explorer")
+        .arg(&dir)
         .spawn()
         .map(|_| ())
-        .map_err(|e| anyhow::anyhow!("spawning shell open: {e}"))
+        .map_err(|e| anyhow::anyhow!("spawning explorer: {e}"))
 }
 
 fn load_reminders(path: &std::path::Path) -> Vec<parser::Reminder> {
