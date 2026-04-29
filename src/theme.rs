@@ -49,17 +49,33 @@ const UI_IMPORTANT_GLOBAL: Color32 = Color32::from_rgb(0xf3, 0xef, 0xfb);
 // palette.content (popup body — slightly more contrast than UI chrome)
 const CONTENT_BACKDROP: Color32 = Color32::from_rgb(0x12, 0x12, 0x12);
 
-/// Load broader-coverage fonts from the Windows fonts directory and
-/// register them with egui as fallbacks. egui's default font set
-/// (`Hack` + `NotoEmoji`) misses most modern emoji and any non-Latin
-/// glyphs; Segoe UI + Segoe UI Emoji + Segoe UI Symbol fill the gap on
-/// every Windows 10/11 install. Cascadia is the canonical monospace.
+// Bundled JetBrains Mono Nerd Font (Mono variant, Regular). Source:
+// https://github.com/ryanoasis/nerd-fonts/releases — OFL-1.1 licensed.
+// Single-cell ("Mono") variant chosen so monospace columns line up.
+const JETBRAINS_MONO_NF: &[u8] =
+    include_bytes!("../assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf");
+
+/// Register fonts with egui:
 ///
-/// Call once at app startup (font atlas rebuild is non-trivial). Fonts
-/// missing from the system are simply skipped — egui falls back to its
-/// bundled defaults for those slots.
+/// 1. JetBrains Mono Nerd Font (bundled) — primary monospace, plus
+///    fallback for the proportional family so headings get nerd glyphs.
+/// 2. Segoe UI Variable / Segoe UI from `C:\Windows\Fonts\` — primary
+///    proportional. Always present on Win10/11.
+/// 3. Cascadia Mono / Code, Segoe UI Emoji / Symbol / Icons —
+///    additional fallbacks for the gaps.
+///
+/// Call once at app startup. `set_fonts` rebuilds the font atlas, so
+/// don't put it in the per-frame path. Fonts that fail to load are
+/// skipped with a warning; egui's bundled defaults take over.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+
+    // Bundled — always present.
+    fonts.font_data.insert(
+        "jetbrains-mono-nf".into(),
+        Arc::new(FontData::from_static(JETBRAINS_MONO_NF)),
+    );
+
     let candidates: &[(&str, &str)] = &[
         ("segoe-ui-variable", r"C:\Windows\Fonts\SegUIVar.ttf"),
         ("segoe-ui", r"C:\Windows\Fonts\segoeui.ttf"),
@@ -70,7 +86,7 @@ pub fn install_fonts(ctx: &egui::Context) {
         ("segoe-icons", r"C:\Windows\Fonts\SegoeIcons.ttf"),
     ];
 
-    let mut loaded = Vec::new();
+    let mut loaded = vec!["jetbrains-mono-nf"];
     for (name, path) in candidates {
         match std::fs::read(path) {
             Ok(bytes) => {
@@ -82,7 +98,7 @@ pub fn install_fonts(ctx: &egui::Context) {
             Err(e) => warn!(font = name, path, error = %e, "system font missing; skipping"),
         }
     }
-    info!(?loaded, "system fonts loaded");
+    info!(?loaded, "fonts loaded");
 
     if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
         for primary in ["segoe-ui-variable", "segoe-ui"] {
@@ -91,17 +107,24 @@ pub fn install_fonts(ctx: &egui::Context) {
                 break;
             }
         }
-        for fallback in ["segoe-icons", "segoe-symbol", "segoe-emoji"] {
+        // Append Nerd Font + symbol / emoji fallbacks so glyphs missing
+        // in Segoe UI flow through to something that has them.
+        for fallback in [
+            "jetbrains-mono-nf",
+            "segoe-icons",
+            "segoe-symbol",
+            "segoe-emoji",
+        ] {
             if fonts.font_data.contains_key(fallback) {
                 family.push(fallback.into());
             }
         }
     }
     if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
-        for primary in ["cascadia-mono", "cascadia-code"] {
-            if fonts.font_data.contains_key(primary) {
-                family.insert(0, primary.into());
-                break;
+        family.insert(0, "jetbrains-mono-nf".into());
+        for fallback in ["cascadia-mono", "cascadia-code"] {
+            if fonts.font_data.contains_key(fallback) {
+                family.push(fallback.into());
             }
         }
         for fallback in ["segoe-icons", "segoe-symbol", "segoe-emoji"] {

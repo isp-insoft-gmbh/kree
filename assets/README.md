@@ -11,6 +11,7 @@ All assets in this directory must be either CC0 (public domain) or otherwise com
 | `tray-icon-paused.png` | Same as above | CC0 | 64×64 RGBA. Desaturated variant for the paused state. |
 | `app-icon.png` | Same as above | CC0 | 256×256 RGBA. Used for README and future Windows binary embedding. |
 | `app-icon.ico` | Converted from `app-icon.png` via ffmpeg | CC0 | 256×256 single-resolution ICO. |
+| `fonts/JetBrainsMonoNerdFontMono-Regular.ttf` | [nerd-fonts v3.4.0](https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.4.0) — `JetBrainsMono.zip` | OFL-1.1 (JetBrains Mono) + MIT (Nerd Font patches) | ~2.4 MB. Primary monospace + Nerd-glyph fallback for the proportional family; embedded via `include_bytes!`. |
 
 ## Regenerating
 

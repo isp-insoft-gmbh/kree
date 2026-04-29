@@ -43,13 +43,10 @@ Open follow-ups not covered by the spec or the current commit history.
   `toml_edit` (not the lossy `toml` crate) for the round-trip. Hot
   reload via the existing `notify-debouncer-mini` plumbing so manual
   edits to `config.toml` apply without a restart.
-- [ ] **Bundle a comprehensive font.** egui ships with `Hack` +
-  `NotoEmoji` only — many modern emoji and all Nerd Font icons render
-  as tofu (□). Embed a Nerd Font (e.g. JetBrainsMono Nerd Font Mono
-  Regular, OFL) plus a broader emoji font, register them via
-  `egui::FontDefinitions`, and prepend them in the proportional +
-  monospace family chains. Also support an override in
-  `%APPDATA%\kree\fonts\` so users can drop their own.
+- [ ] **User font override.** Optional follow-up to the bundled
+  JetBrains Mono Nerd Font: load `%APPDATA%\kree\fonts\*.ttf` at
+  startup and prepend whatever's there to the family chains, so
+  power users can swap in their own font without rebuilding.
 - [ ] **Optimized release profile.** Add a `[profile.release]`
   block to `Cargo.toml` with `lto = "fat"`, `codegen-units = 1`,
   `strip = "symbols"`, `panic = "abort"`, and `opt-level = "z"`
