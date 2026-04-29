@@ -26,6 +26,23 @@ Open follow-ups not covered by the spec or the current commit history.
   the Windows app-mode registry key
   (`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme`)
   and updating on change.
+- [ ] **`config.toml` in `%APPDATA%\kree\` + GUI editor.** Add a small
+  user config file. Initial keys:
+  - `chime = true | false` — play the bundled chime on fire
+  - `speak = true | false` — TTS the body 2 s after fire if popup
+    still visible
+  - `popup_position = "top_left" | "top_center" | "top_right" |
+    "left_center" | "center" | "right_center" | "bottom_left" |
+    "bottom_center" | "bottom_right" | "tray"` — where new popups
+    appear; "tray" is the current default (anchored above the tray
+    icon, screen-corner fallback)
+
+  All three are also editable via the main window. **Critical:** GUI
+  changes must *mutate* `config.toml` in place, not overwrite it —
+  preserve comments, key order, unknown keys, and formatting. Use
+  `toml_edit` (not the lossy `toml` crate) for the round-trip. Hot
+  reload via the existing `notify-debouncer-mini` plumbing so manual
+  edits to `config.toml` apply without a restart.
 - [ ] **Bundle a comprehensive font.** egui ships with `Hack` +
   `NotoEmoji` only — many modern emoji and all Nerd Font icons render
   as tofu (□). Embed a Nerd Font (e.g. JetBrainsMono Nerd Font Mono
