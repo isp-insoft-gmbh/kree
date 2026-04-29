@@ -177,7 +177,7 @@ async fn run_async(
                     info!(schedule = %event.schedule, "skipping fire (paused)");
                     continue;
                 }
-                handle_fire(&runtime, &ui_tx, event);
+                handle_fire(&runtime, &ui_tx, event, &current_config);
             }
             Some(()) = reload_rx.recv() => {
                 let new_reminders = load_reminders(&reminders_path);
@@ -227,6 +227,7 @@ fn handle_fire(
     runtime: &tokio::runtime::Handle,
     ui_tx: &mpsc::UnboundedSender<UiMessage>,
     event: ReminderEvent,
+    config: &config::Config,
 ) {
     info!(
         schedule = %event.schedule,
@@ -235,18 +236,26 @@ fn handle_fire(
         fired_at = %event.fired_at,
         "reminder fired"
     );
-    audio::play_chime();
+
+    if config.chime {
+        audio::play_chime();
+    }
 
     let visible = Arc::new(AtomicBool::new(true));
 
-    let body_for_tts = event.body.clone();
-    let visible_for_tts = Arc::clone(&visible);
-    runtime.spawn(async move {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        if visible_for_tts.load(Ordering::Acquire) {
-            audio::speak(body_for_tts);
-        }
-    });
+    if config.speak {
+        // Gate the timer at spawn — when speak is off we skip the
+        // task entirely rather than running the timer just to drop
+        // the speech at the end.
+        let body_for_tts = event.body.clone();
+        let visible_for_tts = Arc::clone(&visible);
+        runtime.spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if visible_for_tts.load(Ordering::Acquire) {
+                audio::speak(body_for_tts);
+            }
+        });
+    }
 
     let _ = ui_tx.send(UiMessage::LastFired {
         schedule: event.schedule.clone(),
@@ -446,11 +455,13 @@ impl eframe::App for App {
             match msg {
                 UiMessage::Fire(fire) => {
                     let anchor = self.tray.rect_anchor();
-                    let position = popup::compute_position(&self.popups, anchor);
+                    let position =
+                        popup::compute_position(&self.popups, anchor, self.config.popup_position);
                     info!(
                         icon = %fire.icon,
                         body = %fire.body,
                         position = ?position,
+                        anchor = %self.config.popup_position.as_str(),
                         "opening popup"
                     );
                     self.popups.push(popup::PopupHandle::new(fire, position));

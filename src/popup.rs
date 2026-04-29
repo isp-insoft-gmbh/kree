@@ -10,6 +10,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::UiFire;
+use crate::config::PopupPosition;
 
 pub const POPUP_WIDTH: f32 = 320.0;
 pub const POPUP_HEIGHT: f32 = 100.0;
@@ -139,32 +140,96 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
 }
 
 /// Compute the top-left position for a new popup given the currently
-/// active popups. The first popup sits just above the tray (or in the
-/// fallback corner); each subsequent popup stacks above the topmost
-/// existing one with an 8 px gap (SPEC.md § 5.4).
-///
-/// We don't reflow when popups in the middle are dismissed — leaves a
-/// gap, which the spec doesn't forbid and avoids visual jitter.
-pub fn compute_position(existing: &[PopupHandle], anchor: Option<(f32, f32)>) -> (f32, f32) {
-    let base = match anchor {
-        Some((cx, top)) => (cx - POPUP_WIDTH / 2.0, top - POPUP_HEIGHT - TRAY_GAP),
-        None => fallback_position(),
+/// active popups, the tray-rect anchor (if known), and the user's
+/// configured `PopupPosition`. The first popup sits at the chosen
+/// anchor; each subsequent popup stacks toward the screen center
+/// (top-anchored stacks downward, bottom / center / side-center
+/// stacks upward). 8 px gap between stacked popups.
+pub fn compute_position(
+    existing: &[PopupHandle],
+    tray_anchor: Option<(f32, f32)>,
+    position: PopupPosition,
+) -> (f32, f32) {
+    let work_area = work_area();
+    let (base, stack_up) = match position {
+        PopupPosition::Tray => {
+            // Existing behavior: anchored above the tray, screen-corner fallback.
+            let anchor_pos = match tray_anchor {
+                Some((cx, top)) => (cx - POPUP_WIDTH / 2.0, top - POPUP_HEIGHT - TRAY_GAP),
+                None => fallback_position_from(&work_area),
+            };
+            (anchor_pos, true)
+        }
+        other => (
+            anchor_from_work_area(&work_area, other),
+            stack_up_for(other),
+        ),
     };
-    let highest = existing
-        .iter()
-        .map(PopupHandle::top_y)
-        .fold(f32::INFINITY, f32::min);
-    if highest.is_finite() {
-        (base.0, highest - POPUP_HEIGHT - STACK_GAP)
+
+    if existing.is_empty() {
+        return base;
+    }
+
+    let next_y = if stack_up {
+        let topmost = existing
+            .iter()
+            .map(PopupHandle::top_y)
+            .fold(f32::INFINITY, f32::min);
+        topmost - POPUP_HEIGHT - STACK_GAP
     } else {
-        base
+        let bottommost = existing
+            .iter()
+            .map(PopupHandle::top_y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        bottommost + POPUP_HEIGHT + STACK_GAP
+    };
+    (base.0, next_y)
+}
+
+fn stack_up_for(position: PopupPosition) -> bool {
+    matches!(
+        position,
+        PopupPosition::BottomLeft
+            | PopupPosition::BottomCenter
+            | PopupPosition::BottomRight
+            | PopupPosition::Center
+            | PopupPosition::LeftCenter
+            | PopupPosition::RightCenter
+    )
+}
+
+fn anchor_from_work_area(work: &WorkArea, position: PopupPosition) -> (f32, f32) {
+    let cx_screen = (work.left + work.right) / 2.0 - POPUP_WIDTH / 2.0;
+    let cy_screen = (work.top + work.bottom) / 2.0 - POPUP_HEIGHT / 2.0;
+    let left = work.left + EDGE_GAP;
+    let right = work.right - POPUP_WIDTH - EDGE_GAP;
+    let top = work.top + EDGE_GAP;
+    let bottom = work.bottom - POPUP_HEIGHT - EDGE_GAP;
+    match position {
+        PopupPosition::Tray => (right, bottom), // shouldn't happen — caller guards
+        PopupPosition::TopLeft => (left, top),
+        PopupPosition::TopCenter => (cx_screen, top),
+        PopupPosition::TopRight => (right, top),
+        PopupPosition::LeftCenter => (left, cy_screen),
+        PopupPosition::Center => (cx_screen, cy_screen),
+        PopupPosition::RightCenter => (right, cy_screen),
+        PopupPosition::BottomLeft => (left, bottom),
+        PopupPosition::BottomCenter => (cx_screen, bottom),
+        PopupPosition::BottomRight => (right, bottom),
     }
 }
 
-/// Bottom-right corner of the primary monitor's work area, in physical
-/// pixels. Used when `tray.rect_anchor()` returns `None` — e.g. on
-/// virtualized hosts that don't expose the tray icon's rect.
-fn fallback_position() -> (f32, f32) {
+const EDGE_GAP: f32 = 16.0;
+
+#[derive(Debug)]
+struct WorkArea {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+fn work_area() -> WorkArea {
     let mut rect = RECT::default();
     let ok = unsafe {
         SystemParametersInfoW(
@@ -175,12 +240,28 @@ fn fallback_position() -> (f32, f32) {
         )
     };
     if ok.is_ok() {
-        let x = rect.right as f32 - POPUP_WIDTH - TRAY_GAP * 2.0;
-        let y = rect.bottom as f32 - POPUP_HEIGHT - TRAY_GAP * 2.0;
-        return (x, y);
+        WorkArea {
+            left: rect.left as f32,
+            top: rect.top as f32,
+            right: rect.right as f32,
+            bottom: rect.bottom as f32,
+        }
+    } else {
+        // Last-ditch: 1920x1080 minus a typical taskbar.
+        WorkArea {
+            left: 0.0,
+            top: 0.0,
+            right: 1920.0,
+            bottom: 1040.0,
+        }
     }
-    // Last-ditch hardcode for an unhealthy SPI call.
-    (1500.0, 900.0)
+}
+
+fn fallback_position_from(work: &WorkArea) -> (f32, f32) {
+    (
+        work.right - POPUP_WIDTH - TRAY_GAP * 2.0,
+        work.bottom - POPUP_HEIGHT - TRAY_GAP * 2.0,
+    )
 }
 
 #[cfg(test)]
@@ -199,9 +280,9 @@ mod tests {
     }
 
     #[test]
-    fn first_popup_sits_above_tray_anchor() {
+    fn tray_first_popup_sits_above_anchor() {
         let popups: Vec<PopupHandle> = Vec::new();
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // x: cx - W/2 = 1000 - 160 = 840
         // y: top - H - TRAY_GAP = 1040 - 100 - 8 = 932
         assert!((pos.0 - 840.0).abs() < 0.1);
@@ -209,29 +290,89 @@ mod tests {
     }
 
     #[test]
-    fn second_popup_stacks_above_first() {
+    fn tray_second_popup_stacks_above_first() {
         let popups = vec![fake_handle(932.0)];
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // y: 932 - 100 - 8 = 824
         assert!((pos.1 - 824.0).abs() < 0.1);
     }
 
     #[test]
-    fn third_popup_stacks_above_topmost_existing() {
+    fn tray_third_popup_stacks_above_topmost_existing() {
         let popups = vec![fake_handle(932.0), fake_handle(824.0)];
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // y: 824 - 100 - 8 = 716
         assert!((pos.1 - 716.0).abs() < 0.1);
     }
 
     #[test]
-    fn dismissed_middle_popup_leaves_gap() {
+    fn tray_dismissed_middle_popup_leaves_gap() {
         // Middle popup at y=824 was dismissed and removed; new popup
         // should still go above the topmost remaining (y=716), not
         // refill the gap.
         let popups = vec![fake_handle(932.0), fake_handle(716.0)];
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // y: 716 - 100 - 8 = 608
         assert!((pos.1 - 608.0).abs() < 0.1);
+    }
+
+    fn anchor_for_test(position: PopupPosition) -> (f32, f32) {
+        // Pure helper that bypasses Win32 — assert against a fake
+        // 1920x1040 work area (taskbar at bottom).
+        let work = WorkArea {
+            left: 0.0,
+            top: 0.0,
+            right: 1920.0,
+            bottom: 1040.0,
+        };
+        anchor_from_work_area(&work, position)
+    }
+
+    #[test]
+    fn fixed_anchors_against_fake_work_area() {
+        // POPUP_WIDTH=320, POPUP_HEIGHT=100, EDGE_GAP=16
+        // work: 0,0 → 1920,1040
+        // top:    16
+        // bottom: 1040 - 100 - 16 = 924
+        // left:   16
+        // right:  1920 - 320 - 16 = 1584
+        // cx_screen: 960 - 160 = 800
+        // cy_screen: 520 - 50  = 470
+        let cases: &[(PopupPosition, (f32, f32))] = &[
+            (PopupPosition::TopLeft, (16.0, 16.0)),
+            (PopupPosition::TopCenter, (800.0, 16.0)),
+            (PopupPosition::TopRight, (1584.0, 16.0)),
+            (PopupPosition::LeftCenter, (16.0, 470.0)),
+            (PopupPosition::Center, (800.0, 470.0)),
+            (PopupPosition::RightCenter, (1584.0, 470.0)),
+            (PopupPosition::BottomLeft, (16.0, 924.0)),
+            (PopupPosition::BottomCenter, (800.0, 924.0)),
+            (PopupPosition::BottomRight, (1584.0, 924.0)),
+        ];
+        for (pos, expected) in cases {
+            let actual = anchor_for_test(*pos);
+            assert!(
+                (actual.0 - expected.0).abs() < 1.0 && (actual.1 - expected.1).abs() < 1.0,
+                "{pos:?}: got {actual:?}, expected {expected:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn top_anchored_stacks_downward() {
+        // top_left first popup at (16, 16); second should land at
+        // y = 16 + 100 + 8 = 124.
+        let first = fake_handle(16.0);
+        let pos = compute_position(&[first], None, PopupPosition::TopLeft);
+        assert!((pos.1 - 124.0).abs() < 1.0, "{pos:?}");
+    }
+
+    #[test]
+    fn bottom_anchored_stacks_upward() {
+        // bottom_right first popup with bottom = 924; second at
+        // y = 924 - 100 - 8 = 816.
+        let first = fake_handle(924.0);
+        let pos = compute_position(&[first], None, PopupPosition::BottomRight);
+        assert!((pos.1 - 816.0).abs() < 1.0, "{pos:?}");
     }
 }
