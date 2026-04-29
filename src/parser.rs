@@ -9,11 +9,8 @@ const DEFAULT_ICON: &str = "🔔";
 
 /// A single parsed reminder. The original schedule string is kept alongside
 /// the parsed `Cron` so it can be shown verbatim in the main window.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Reminder {
-    // `cron` is read by the scheduler (build-order step 5); silence dead-code
-    // until then so step 4 can land cleanly under `-D warnings`.
-    #[allow(dead_code)]
     pub cron: Cron,
     pub schedule: String,
     pub icon: String,
