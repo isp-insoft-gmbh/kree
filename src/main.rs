@@ -102,7 +102,12 @@ fn main() -> Result<()> {
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(App::new(ui_rx, reload_tx, paused)?))
+            Ok(Box::new(App::new(
+                cc.egui_ctx.clone(),
+                ui_rx,
+                reload_tx,
+                paused,
+            )?))
         }),
     );
 
@@ -251,10 +256,19 @@ struct App {
     window_state: main_window::MainWindowState,
     reminders: Vec<parser::Reminder>,
     last_fired: HashMap<String, DateTime<Local>>,
+    /// Tray menu events are forwarded into this channel by a callback we
+    /// install on `MenuEvent::set_event_handler`. The callback also calls
+    /// `Context::request_repaint`, which is the only way to wake the
+    /// eframe loop while the root viewport is hidden — without it,
+    /// `App::ui` never runs and Quit clicks pile up unread.
+    menu_rx: mpsc::UnboundedReceiver<MenuEvent>,
+    /// Tray icon click events arrive via the same custom-handler trick.
+    tray_event_rx: mpsc::UnboundedReceiver<TrayIconEvent>,
 }
 
 impl App {
     fn new(
+        ctx: egui::Context,
         ui_rx: mpsc::UnboundedReceiver<UiMessage>,
         reload_tx: mpsc::UnboundedSender<()>,
         paused: Arc<AtomicBool>,
@@ -265,6 +279,26 @@ impl App {
             Ok(v) => window_state.autostart = v,
             Err(e) => warn!(error = %e, "could not read autostart state; assuming off"),
         }
+
+        // Replace the default tray-icon event sinks with custom ones that
+        // (1) forward into our own channels and (2) ping `request_repaint`
+        // so the eframe loop wakes up even with the root viewport hidden.
+        // The default sinks just enqueue into a global `Receiver`, which
+        // we'd never drain because `App::ui` doesn't run while hidden.
+        let (menu_tx, menu_rx) = mpsc::unbounded_channel::<MenuEvent>();
+        let menu_ctx = ctx.clone();
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let _ = menu_tx.send(event);
+            menu_ctx.request_repaint();
+        }));
+
+        let (tray_event_tx, tray_event_rx) = mpsc::unbounded_channel::<TrayIconEvent>();
+        let tray_ctx = ctx.clone();
+        TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            let _ = tray_event_tx.send(event);
+            tray_ctx.request_repaint();
+        }));
+
         Ok(Self {
             tray,
             ui_rx,
@@ -275,6 +309,8 @@ impl App {
             window_state,
             reminders: Vec::new(),
             last_fired: HashMap::new(),
+            menu_rx,
+            tray_event_rx,
         })
     }
 
@@ -353,9 +389,8 @@ impl eframe::App for App {
             }
         }
 
-        // Drain tray menu events.
-        let menu_rx = MenuEvent::receiver();
-        while let Ok(menu_event) = menu_rx.try_recv() {
+        // Drain tray menu events from our own channel (see App::new).
+        while let Ok(menu_event) = self.menu_rx.try_recv() {
             let id = menu_event.id();
             if id == &self.tray.quit_id {
                 info!("Quit menu clicked; exiting");
@@ -376,9 +411,8 @@ impl eframe::App for App {
             }
         }
 
-        // Tray left-click toggles the main window.
-        let tray_rx = TrayIconEvent::receiver();
-        while let Ok(tray_event) = tray_rx.try_recv() {
+        // Drain tray icon click events. Left-click toggles the main window.
+        while let Ok(tray_event) = self.tray_event_rx.try_recv() {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
@@ -390,24 +424,21 @@ impl eframe::App for App {
                 if self.main_visible {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
-                // Force an immediate repaint so the new visibility +
-                // freshly-rendered content land in the same frame the
-                // user perceives as "click → window appears with
-                // contents", not "click → empty window then content".
                 ctx.request_repaint();
             }
         }
 
-        if self.main_visible {
-            let actions = main_window::render(
-                ui,
-                &mut self.window_state,
-                &self.reminders,
-                &self.last_fired,
-            );
-            for action in actions {
-                self.handle_main_window_action(action);
-            }
+        // Always render main-window contents into egui's frame buffer,
+        // even when the window is hidden. Otherwise a freshly-shown
+        // window flashes empty for one frame before the content lands.
+        let actions = main_window::render(
+            ui,
+            &mut self.window_state,
+            &self.reminders,
+            &self.last_fired,
+        );
+        for action in actions {
+            self.handle_main_window_action(action);
         }
 
         self.popups.retain_mut(|popup| popup.show(&ctx));

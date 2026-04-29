@@ -5,8 +5,8 @@ use eframe::egui;
 
 use crate::parser::Reminder;
 
-pub const WIDTH: f32 = 720.0;
-pub const HEIGHT: f32 = 440.0;
+pub const WIDTH: f32 = 760.0;
+pub const HEIGHT: f32 = 480.0;
 
 #[derive(Default)]
 pub struct MainWindowState {
@@ -26,77 +26,87 @@ pub fn render(
 ) -> Vec<MainWindowAction> {
     let mut actions = Vec::new();
 
-    ui.add_space(8.0);
-    ui.heading("kree");
-    ui.label(egui::RichText::new("Cron-scheduled reminders.").weak());
-    ui.add_space(8.0);
+    egui::Frame::default()
+        .inner_margin(egui::Margin::symmetric(20, 16))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+            ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
 
-    ui.horizontal(|ui| {
-        if ui.button("Edit Reminders").clicked() {
-            actions.push(MainWindowAction::EditReminders);
-        }
-        if ui.button("Reload").clicked() {
-            actions.push(MainWindowAction::Reload);
-        }
-        let pause_label = if state.paused { "Resume" } else { "Pause All" };
-        if ui.button(pause_label).clicked() {
-            state.paused = !state.paused;
-            actions.push(MainWindowAction::SetPaused(state.paused));
-        }
-        if ui
-            .checkbox(&mut state.autostart, "Start with Windows")
-            .changed()
-        {
-            actions.push(MainWindowAction::SetAutostart(state.autostart));
-        }
-    });
+            ui.heading(egui::RichText::new("kree").size(22.0));
+            ui.label(egui::RichText::new("Cron-scheduled reminders.").weak());
+            ui.add_space(12.0);
 
-    ui.add_space(8.0);
-    ui.separator();
-    ui.add_space(8.0);
-
-    if reminders.is_empty() {
-        ui.label(egui::RichText::new("No reminders loaded.").italics().weak());
-        ui.label("Click Edit Reminders to add some.");
-        return actions;
-    }
-
-    let now = Local::now();
-
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        egui::Grid::new("reminders-grid")
-            .num_columns(5)
-            .striped(true)
-            .spacing([16.0, 6.0])
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("Schedule").strong());
-                ui.label(egui::RichText::new("Icon").strong());
-                ui.label(egui::RichText::new("Message").strong());
-                ui.label(egui::RichText::new("Next fire").strong());
-                ui.label(egui::RichText::new("Last fired").strong());
-                ui.end_row();
-
-                for reminder in reminders {
-                    ui.label(egui::RichText::new(&reminder.schedule).monospace());
-                    ui.label(egui::RichText::new(&reminder.icon).size(20.0));
-                    ui.label(&reminder.body);
-
-                    let next = reminder
-                        .cron
-                        .find_next_occurrence(&now, false)
-                        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|_| "—".into());
-                    ui.label(next);
-
-                    let last = match last_fired.get(&reminder.schedule) {
-                        Some(t) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
-                        None => "—".into(),
-                    };
-                    ui.label(last);
-                    ui.end_row();
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if ui.button("Edit Reminders").clicked() {
+                    actions.push(MainWindowAction::EditReminders);
+                }
+                if ui.button("Reload").clicked() {
+                    actions.push(MainWindowAction::Reload);
+                }
+                let pause_label = if state.paused { "Resume" } else { "Pause All" };
+                if ui.button(pause_label).clicked() {
+                    state.paused = !state.paused;
+                    actions.push(MainWindowAction::SetPaused(state.paused));
+                }
+                ui.add_space(8.0);
+                if ui
+                    .checkbox(&mut state.autostart, "Start with Windows")
+                    .changed()
+                {
+                    actions.push(MainWindowAction::SetAutostart(state.autostart));
                 }
             });
-    });
+
+            ui.add_space(14.0);
+            ui.separator();
+            ui.add_space(14.0);
+
+            if reminders.is_empty() {
+                ui.label(egui::RichText::new("No reminders loaded.").italics().weak());
+                ui.add_space(4.0);
+                ui.label("Click Edit Reminders to add some.");
+                return;
+            }
+
+            let now = Local::now();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("reminders-grid")
+                    .num_columns(5)
+                    .striped(true)
+                    .spacing([22.0, 10.0])
+                    .min_col_width(80.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Schedule").strong());
+                        ui.label(egui::RichText::new("Icon").strong());
+                        ui.label(egui::RichText::new("Message").strong());
+                        ui.label(egui::RichText::new("Next fire").strong());
+                        ui.label(egui::RichText::new("Last fired").strong());
+                        ui.end_row();
+
+                        for reminder in reminders {
+                            ui.label(egui::RichText::new(&reminder.schedule).monospace());
+                            ui.label(egui::RichText::new(&reminder.icon).size(22.0));
+                            ui.label(&reminder.body);
+
+                            let next = reminder
+                                .cron
+                                .find_next_occurrence(&now, false)
+                                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                                .unwrap_or_else(|_| "—".into());
+                            ui.label(egui::RichText::new(next).monospace());
+
+                            let last = match last_fired.get(&reminder.schedule) {
+                                Some(t) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
+                                None => "—".into(),
+                            };
+                            ui.label(egui::RichText::new(last).monospace());
+                            ui.end_row();
+                        }
+                    });
+            });
+        });
 
     actions
 }

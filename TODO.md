@@ -26,6 +26,13 @@ Open follow-ups not covered by the spec or the current commit history.
   the Windows app-mode registry key
   (`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme`)
   and updating on change.
+- [ ] **Bundle a comprehensive font.** egui ships with `Hack` +
+  `NotoEmoji` only — many modern emoji and all Nerd Font icons render
+  as tofu (□). Embed a Nerd Font (e.g. JetBrainsMono Nerd Font Mono
+  Regular, OFL) plus a broader emoji font, register them via
+  `egui::FontDefinitions`, and prepend them in the proportional +
+  monospace family chains. Also support an override in
+  `%APPDATA%\kree\fonts\` so users can drop their own.
 - [ ] **Optimized release profile.** Add a `[profile.release]`
   block to `Cargo.toml` with `lto = "fat"`, `codegen-units = 1`,
   `strip = "symbols"`, `panic = "abort"`, and `opt-level = "z"`
