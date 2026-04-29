@@ -21,7 +21,11 @@ pub fn play_chime() {
 }
 
 fn play_chime_inner() -> Result<()> {
-    let stream_handle = rodio::DeviceSinkBuilder::open_default_sink()?;
+    let mut stream_handle = rodio::DeviceSinkBuilder::open_default_sink()?;
+    // Suppress rodio's "Dropping DeviceSink" stderr line on every fire —
+    // we deliberately drop the sink after a short hold and don't need
+    // the warning. Failures are still surfaced via tracing.
+    stream_handle.log_on_drop(false);
     let mixer = stream_handle.mixer();
     let _player = rodio::play(mixer, Cursor::new(CHIME_BYTES))?;
     // Block long enough for the chime to finish before the handle drops
