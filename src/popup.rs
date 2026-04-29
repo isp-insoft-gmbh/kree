@@ -16,6 +16,7 @@ pub const POPUP_HEIGHT: f32 = 100.0;
 
 const AUTO_DISMISS: Duration = Duration::from_secs(30);
 const TRAY_GAP: f32 = 8.0;
+const STACK_GAP: f32 = 8.0;
 
 /// One live popup. The shared `visible` flag is observed by the 2-second
 /// TTS gate (in `run_async`) to decide whether to speak.
@@ -35,11 +36,7 @@ struct PopupData {
 }
 
 impl PopupHandle {
-    pub fn new(fire: UiFire, anchor: Option<(f32, f32)>) -> Self {
-        let position = match anchor {
-            Some((cx, top)) => (cx - POPUP_WIDTH / 2.0, top - POPUP_HEIGHT - TRAY_GAP),
-            None => fallback_position(),
-        };
+    pub fn new(fire: UiFire, position: (f32, f32)) -> Self {
         Self {
             inner: Arc::new(PopupData {
                 icon: fire.icon,
@@ -50,6 +47,10 @@ impl PopupHandle {
             opened_at: Instant::now(),
             position,
         }
+    }
+
+    fn top_y(&self) -> f32 {
+        self.position.1
     }
 
     /// Render this popup as a deferred viewport. Returns `true` if the
@@ -117,6 +118,29 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
         });
 }
 
+/// Compute the top-left position for a new popup given the currently
+/// active popups. The first popup sits just above the tray (or in the
+/// fallback corner); each subsequent popup stacks above the topmost
+/// existing one with an 8 px gap (SPEC.md § 5.4).
+///
+/// We don't reflow when popups in the middle are dismissed — leaves a
+/// gap, which the spec doesn't forbid and avoids visual jitter.
+pub fn compute_position(existing: &[PopupHandle], anchor: Option<(f32, f32)>) -> (f32, f32) {
+    let base = match anchor {
+        Some((cx, top)) => (cx - POPUP_WIDTH / 2.0, top - POPUP_HEIGHT - TRAY_GAP),
+        None => fallback_position(),
+    };
+    let highest = existing
+        .iter()
+        .map(PopupHandle::top_y)
+        .fold(f32::INFINITY, f32::min);
+    if highest.is_finite() {
+        (base.0, highest - POPUP_HEIGHT - STACK_GAP)
+    } else {
+        base
+    }
+}
+
 /// Bottom-right corner of the primary monitor's work area, in physical
 /// pixels. Used when `tray.rect_anchor()` returns `None` — e.g. on
 /// virtualized hosts that don't expose the tray icon's rect.
@@ -137,4 +161,57 @@ fn fallback_position() -> (f32, f32) {
     }
     // Last-ditch hardcode for an unhealthy SPI call.
     (1500.0, 900.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_handle(top_y: f32) -> PopupHandle {
+        let visible = Arc::new(AtomicBool::new(true));
+        let fire = UiFire {
+            icon: "🔬".into(),
+            body: "test".into(),
+            fired_at: Local::now(),
+            visible,
+        };
+        PopupHandle::new(fire, (100.0, top_y))
+    }
+
+    #[test]
+    fn first_popup_sits_above_tray_anchor() {
+        let popups: Vec<PopupHandle> = Vec::new();
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        // x: cx - W/2 = 1000 - 160 = 840
+        // y: top - H - TRAY_GAP = 1040 - 100 - 8 = 932
+        assert!((pos.0 - 840.0).abs() < 0.1);
+        assert!((pos.1 - 932.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn second_popup_stacks_above_first() {
+        let popups = vec![fake_handle(932.0)];
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        // y: 932 - 100 - 8 = 824
+        assert!((pos.1 - 824.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn third_popup_stacks_above_topmost_existing() {
+        let popups = vec![fake_handle(932.0), fake_handle(824.0)];
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        // y: 824 - 100 - 8 = 716
+        assert!((pos.1 - 716.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn dismissed_middle_popup_leaves_gap() {
+        // Middle popup at y=824 was dismissed and removed; new popup
+        // should still go above the topmost remaining (y=716), not
+        // refill the gap.
+        let popups = vec![fake_handle(932.0), fake_handle(716.0)];
+        let pos = compute_position(&popups, Some((1000.0, 1040.0)));
+        // y: 716 - 100 - 8 = 608
+        assert!((pos.1 - 608.0).abs() < 0.1);
+    }
 }

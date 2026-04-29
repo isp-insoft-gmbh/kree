@@ -184,13 +184,14 @@ impl eframe::App for App {
         // Drain reminder fires from the tokio side and open popups.
         while let Ok(fire) = self.ui_rx.try_recv() {
             let anchor = self.tray.rect_anchor();
+            let position = popup::compute_position(&self.popups, anchor);
             info!(
                 icon = %fire.icon,
                 body = %fire.body,
-                anchor = ?anchor,
+                position = ?position,
                 "opening popup"
             );
-            self.popups.push(popup::PopupHandle::new(fire, anchor));
+            self.popups.push(popup::PopupHandle::new(fire, position));
         }
 
         // Drain tray menu events.
