@@ -248,7 +248,6 @@ struct App {
     paused: Arc<AtomicBool>,
     popups: Vec<popup::PopupHandle>,
     main_visible: bool,
-    quitting: bool,
     window_state: main_window::MainWindowState,
     reminders: Vec<parser::Reminder>,
     last_fired: HashMap<String, DateTime<Local>>,
@@ -273,7 +272,6 @@ impl App {
             paused,
             popups: Vec::new(),
             main_visible: false,
-            quitting: false,
             window_state,
             reminders: Vec::new(),
             last_fired: HashMap::new(),
@@ -319,13 +317,11 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
 
         if ctx.input(|i| i.viewport().close_requested()) {
-            if self.quitting {
-                // Let it close.
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                self.main_visible = false;
-            }
+            // Window-X always means "hide to tray". Real exit goes
+            // through the Quit menu, which calls process::exit directly.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.main_visible = false;
         }
 
         // Drain UI messages from the tokio side.
@@ -357,9 +353,13 @@ impl eframe::App for App {
         while let Ok(menu_event) = menu_rx.try_recv() {
             let id = menu_event.id();
             if id == &self.tray.quit_id {
-                info!("Quit menu clicked; closing root viewport");
-                self.quitting = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                info!("Quit menu clicked; exiting");
+                // The hidden root viewport doesn't reliably honor
+                // `ViewportCommand::Close` (eframe stays alive driving
+                // popups + tray), so go straight to a process exit.
+                // Tracing's non-blocking appender may lose its tail —
+                // acceptable for an explicit user-initiated quit.
+                std::process::exit(0);
             } else if id == &self.tray.edit_id {
                 if let Err(e) = open_editor() {
                     warn!(error = %e, "edit reminders failed");
