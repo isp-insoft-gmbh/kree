@@ -43,10 +43,16 @@ Open follow-ups not covered by the spec or the current commit history.
   `toml_edit` (not the lossy `toml` crate) for the round-trip. Hot
   reload via the existing `notify-debouncer-mini` plumbing so manual
   edits to `config.toml` apply without a restart.
-- [ ] **User font override.** Optional follow-up to the bundled
-  JetBrains Mono Nerd Font: load `%APPDATA%\kree\fonts\*.ttf` at
-  startup and prepend whatever's there to the family chains, so
-  power users can swap in their own font without rebuilding.
+- [ ] **Pick fonts from installed system fonts via `config.toml`.**
+  Add `font.proportional`, `font.monospace`, `font.fallbacks` keys to
+  the planned `config.toml`. Resolve each value to a file by
+  enumerating installed fonts (Win32 `EnumFontFamiliesEx` over
+  `GetDC(NULL)`, or scan `C:\Windows\Fonts` + `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
+  for `*.ttf`/`*.otf`/`*.ttc` and parse the `name` table for the
+  family name) and prepend the resolved bytes to the matching
+  egui `FontFamily`. Keep the bundled JetBrains Mono Nerd Font as
+  the always-present fallback so a missing or mistyped family name
+  never tofus the entire UI.
 - [ ] **Optimized release profile.** Add a `[profile.release]`
   block to `Cargo.toml` with `lto = "fat"`, `codegen-units = 1`,
   `strip = "symbols"`, `panic = "abort"`, and `opt-level = "z"`
