@@ -15,6 +15,7 @@ pub const POPUP_WIDTH: f32 = 320.0;
 pub const POPUP_HEIGHT: f32 = 100.0;
 
 const AUTO_DISMISS: Duration = Duration::from_secs(30);
+const FADE_IN: Duration = Duration::from_millis(180);
 const TRAY_GAP: f32 = 8.0;
 const STACK_GAP: f32 = 8.0;
 
@@ -33,18 +34,21 @@ struct PopupData {
     body: String,
     fired_at: DateTime<Local>,
     visible: Arc<AtomicBool>,
+    opened_at: Instant,
 }
 
 impl PopupHandle {
     pub fn new(fire: UiFire, position: (f32, f32)) -> Self {
+        let now = Instant::now();
         Self {
             inner: Arc::new(PopupData {
                 icon: fire.icon,
                 body: fire.body,
                 fired_at: fire.fired_at,
                 visible: fire.visible,
+                opened_at: now,
             }),
-            opened_at: Instant::now(),
+            opened_at: now,
             position,
         }
     }
@@ -86,6 +90,13 @@ impl PopupHandle {
 }
 
 fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
+    let elapsed = popup.opened_at.elapsed();
+    let alpha = if elapsed >= FADE_IN {
+        1.0
+    } else {
+        elapsed.as_secs_f32() / FADE_IN.as_secs_f32()
+    };
+
     // CentralPanel::show against a Context is still the canonical
     // multi-viewport entry point; the rename to show_inside is for
     // nested-Ui usage. Allow the deprecation here.
@@ -98,6 +109,7 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
                 .inner_margin(egui::Margin::symmetric(12, 10)),
         )
         .show(ctx, |ui| {
+            ui.multiply_opacity(alpha);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&popup.icon).size(40.0));
                 ui.add_space(8.0);
@@ -116,6 +128,11 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
                 });
             });
         });
+
+    // Drive the fade until it completes; egui won't repaint on its own.
+    if alpha < 1.0 {
+        ctx.request_repaint();
+    }
 }
 
 /// Compute the top-left position for a new popup given the currently

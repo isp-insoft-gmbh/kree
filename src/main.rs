@@ -64,11 +64,20 @@ fn main() -> Result<()> {
 
     let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiMessage>();
     let (reload_tx, reload_rx) = mpsc::unbounded_channel::<()>();
+    let paused = Arc::new(AtomicBool::new(false));
 
     let runtime_for_async = runtime_handle.clone();
     let reload_tx_for_watcher = reload_tx.clone();
+    let paused_for_async = Arc::clone(&paused);
     runtime_handle.spawn(async move {
-        if let Err(e) = run_async(runtime_for_async, ui_tx, reload_rx, reload_tx_for_watcher).await
+        if let Err(e) = run_async(
+            runtime_for_async,
+            ui_tx,
+            reload_rx,
+            reload_tx_for_watcher,
+            paused_for_async,
+        )
+        .await
         {
             warn!(error = %e, "async lifecycle exited with error");
         }
@@ -85,7 +94,7 @@ fn main() -> Result<()> {
     let run_result = eframe::run_native(
         "kree",
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(ui_rx, reload_tx)?))),
+        Box::new(move |_cc| Ok(Box::new(App::new(ui_rx, reload_tx, paused)?))),
     );
 
     info!("eframe loop exited; shutting down runtime");
@@ -99,6 +108,7 @@ async fn run_async(
     ui_tx: mpsc::UnboundedSender<UiMessage>,
     mut reload_rx: mpsc::UnboundedReceiver<()>,
     reload_tx_for_watcher: mpsc::UnboundedSender<()>,
+    paused: Arc<AtomicBool>,
 ) -> Result<()> {
     let path = paths::reminders_path()?;
 
@@ -121,6 +131,10 @@ async fn run_async(
     loop {
         tokio::select! {
             Some(event) = sched_rx.recv() => {
+                if paused.load(Ordering::Acquire) {
+                    info!(schedule = %event.schedule, "skipping fire (paused)");
+                    continue;
+                }
                 handle_fire(&runtime, &ui_tx, event);
             }
             Some(()) = reload_rx.recv() => {
@@ -201,6 +215,7 @@ struct App {
     tray: tray::Tray,
     ui_rx: mpsc::UnboundedReceiver<UiMessage>,
     reload_tx: mpsc::UnboundedSender<()>,
+    paused: Arc<AtomicBool>,
     popups: Vec<popup::PopupHandle>,
     main_visible: bool,
     quitting: bool,
@@ -212,6 +227,7 @@ impl App {
     fn new(
         ui_rx: mpsc::UnboundedReceiver<UiMessage>,
         reload_tx: mpsc::UnboundedSender<()>,
+        paused: Arc<AtomicBool>,
     ) -> Result<Self> {
         let tray = tray::build()?;
         let mut window_state = main_window::MainWindowState::default();
@@ -223,6 +239,7 @@ impl App {
             tray,
             ui_rx,
             reload_tx,
+            paused,
             popups: Vec::new(),
             main_visible: false,
             quitting: false,
@@ -242,7 +259,11 @@ impl App {
                 let _ = self.reload_tx.send(());
             }
             main_window::MainWindowAction::SetPaused(p) => {
-                info!(paused = p, "Pause toggled (no-op until step 15 polish)");
+                self.paused.store(p, Ordering::Release);
+                if let Err(e) = self.tray.set_paused(p) {
+                    warn!(error = %e, "tray set_paused failed");
+                }
+                info!(paused = p, "pause state updated");
             }
             main_window::MainWindowAction::SetAutostart(enabled) => {
                 match autostart::set(enabled) {
