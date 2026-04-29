@@ -36,15 +36,29 @@ pub fn render(
             // resolves to `widgets.noninteractive.fg_stroke.color`, which
             // is `ui.normal` (#dbdbdb) and reads as muted on the dark
             // chrome. Use `ui.important_global` (#f3effb) for headings.
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("kree")
+                        .size(30.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(0xf3, 0xef, 0xfb)),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("⟁")
+                        .size(22.0)
+                        .color(egui::Color32::from_rgb(0xd8, 0x6d, 0xd8)),
+                );
+            });
             ui.label(
-                egui::RichText::new("kree")
-                    .size(28.0)
-                    .strong()
-                    .color(egui::Color32::from_rgb(0xf3, 0xef, 0xfb)),
+                egui::RichText::new("Jaffa, kree! Cron-scheduled reminders.")
+                    .size(13.0)
+                    .italics()
+                    .color(egui::Color32::from_rgb(0xc9, 0xb6, 0xeb)),
             );
             ui.label(
-                egui::RichText::new("Cron-scheduled reminders.")
-                    .size(13.0)
+                egui::RichText::new("\"Loosely translated: attention, listen up.\"  — D. Jackson")
+                    .size(11.0)
                     .color(egui::Color32::from_rgb(0x9d, 0x9d, 0x9d)),
             );
             ui.add_space(14.0);

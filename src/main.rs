@@ -213,19 +213,21 @@ fn open_editor() -> Result<()> {
     editor::open(&path)
 }
 
-/// Open the kree logs directory in Explorer. We deliberately don't try
-/// to open the active log file directly: `tracing-appender` holds it
-/// with an exclusive lock on Windows, so Notepad (and most other
-/// default `.log` handlers) fail with `ERROR_SHARING_VIOLATION`. The
-/// directory view always works, and the user can copy out / open with
-/// a tool that uses shared reads (VS Code, PowerShell `Get-Content`,
-/// etc.).
+/// Open the most recent log file in the user's `$VISUAL` / `$EDITOR`
+/// (same path as Edit Reminders). On Windows `tracing-appender` holds
+/// the active file with an exclusive lock — Notepad fails on it, but
+/// any modern editor (VS Code, Helix, Neovim, …) opens with shared
+/// reads. Fall back to opening the logs directory if no log file
+/// exists yet.
 fn open_log() -> Result<()> {
+    if let Some(path) = paths::latest_log_file()? {
+        return editor::open(&path);
+    }
     let dir = paths::logs_dir()?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
         warn!(path = %dir.display(), error = %e, "could not create logs dir; opening anyway");
     }
-    info!(path = %dir.display(), "opening logs directory");
+    info!(path = %dir.display(), "no log file yet; opening logs directory in Explorer");
     std::process::Command::new("explorer")
         .arg(&dir)
         .spawn()
