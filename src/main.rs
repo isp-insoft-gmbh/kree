@@ -1,5 +1,6 @@
 mod audio;
 mod autostart;
+mod config;
 mod editor;
 mod logging;
 mod main_window;
@@ -32,11 +33,18 @@ use crate::scheduler::{ReminderEvent, Scheduler};
 #[derive(Debug)]
 pub enum UiMessage {
     Fire(UiFire),
-    Snapshot(Vec<parser::Reminder>),
+    Snapshot(SnapshotPayload),
     LastFired {
         schedule: String,
         at: DateTime<Local>,
     },
+}
+
+/// Snapshot pushed on startup and on every successful hot-reload.
+#[derive(Debug, Clone)]
+pub struct SnapshotPayload {
+    pub reminders: Vec<parser::Reminder>,
+    pub config: config::Config,
 }
 
 #[derive(Debug)]
@@ -128,10 +136,16 @@ async fn run_async(
     reload_tx_for_watcher: mpsc::UnboundedSender<()>,
     paused: Arc<AtomicBool>,
 ) -> Result<()> {
-    let path = paths::reminders_path()?;
+    let reminders_path = paths::reminders_path()?;
+    let config_path = paths::config_path()?;
+    let data_dir = paths::data_dir()?;
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        warn!(path = %data_dir.display(), error = %e, "could not create data dir");
+    }
 
-    // Watcher kept alive for the lifetime of this task.
-    let _watcher = match watcher::watch(&path, reload_tx_for_watcher) {
+    // Watch the whole data dir non-recursively so both reminders.txt
+    // and config.toml share one debounced reload signal.
+    let _watcher = match watcher::watch(&data_dir, reload_tx_for_watcher) {
         Ok(w) => Some(w),
         Err(e) => {
             warn!(error = %e, "file watcher unavailable; hot reload disabled");
@@ -139,12 +153,22 @@ async fn run_async(
         }
     };
 
-    let mut current = load_reminders(&path);
-    let _ = ui_tx.send(UiMessage::Snapshot(current.clone()));
-    info!(count = current.len(), "scheduling reminders");
+    let mut current_reminders = load_reminders(&reminders_path);
+    let mut current_config = load_config(&config_path);
+    let _ = ui_tx.send(UiMessage::Snapshot(SnapshotPayload {
+        reminders: current_reminders.clone(),
+        config: current_config.clone(),
+    }));
+    info!(
+        reminders = current_reminders.len(),
+        chime = current_config.chime,
+        speak = current_config.speak,
+        popup_position = current_config.popup_position.as_str(),
+        "initial snapshot"
+    );
 
     let (sched_tx, mut sched_rx) = mpsc::channel::<ReminderEvent>(64);
-    let mut scheduler = Scheduler::spawn(current.clone(), sched_tx.clone());
+    let mut scheduler = Scheduler::spawn(current_reminders.clone(), sched_tx.clone());
 
     loop {
         tokio::select! {
@@ -156,12 +180,42 @@ async fn run_async(
                 handle_fire(&runtime, &ui_tx, event);
             }
             Some(()) = reload_rx.recv() => {
-                info!("reloading reminders");
-                drop(scheduler);
-                current = load_reminders(&path);
-                let _ = ui_tx.send(UiMessage::Snapshot(current.clone()));
-                info!(count = current.len(), "rescheduling reminders");
-                scheduler = Scheduler::spawn(current.clone(), sched_tx.clone());
+                let new_reminders = load_reminders(&reminders_path);
+                let new_config = load_config(&config_path);
+                let reminders_changed = new_reminders.len() != current_reminders.len()
+                    || new_reminders.iter().zip(current_reminders.iter()).any(|(a, b)| {
+                        a.schedule != b.schedule || a.icon != b.icon || a.body != b.body
+                    });
+                let config_changed = new_config != current_config;
+
+                // Feedback-loop guard: when our own atomic write echoes
+                // back through the watcher, the parsed contents are
+                // identical and we skip the broadcast.
+                if !reminders_changed && !config_changed {
+                    continue;
+                }
+
+                if reminders_changed {
+                    info!("reloading reminders");
+                    drop(scheduler);
+                    current_reminders = new_reminders;
+                    info!(count = current_reminders.len(), "rescheduling reminders");
+                    scheduler = Scheduler::spawn(current_reminders.clone(), sched_tx.clone());
+                }
+                if config_changed {
+                    info!(
+                        chime = new_config.chime,
+                        speak = new_config.speak,
+                        popup_position = new_config.popup_position.as_str(),
+                        "reloading config"
+                    );
+                    current_config = new_config;
+                }
+
+                let _ = ui_tx.send(UiMessage::Snapshot(SnapshotPayload {
+                    reminders: current_reminders.clone(),
+                    config: current_config.clone(),
+                }));
             }
             else => break,
         }
@@ -235,6 +289,16 @@ fn open_log() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("spawning explorer: {e}"))
 }
 
+fn load_config(path: &std::path::Path) -> config::Config {
+    match config::load(path) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(error = %e, "config load failed; using defaults");
+            config::Config::default()
+        }
+    }
+}
+
 fn load_reminders(path: &std::path::Path) -> Vec<parser::Reminder> {
     match std::fs::read_to_string(path) {
         Ok(contents) => {
@@ -265,6 +329,7 @@ struct App {
     main_visible: bool,
     window_state: main_window::MainWindowState,
     reminders: Vec<parser::Reminder>,
+    config: config::Config,
     last_fired: HashMap<String, DateTime<Local>>,
     /// Tray menu events are forwarded into this channel by a callback we
     /// install on `MenuEvent::set_event_handler`. The callback also calls
@@ -318,6 +383,7 @@ impl App {
             main_visible: false,
             window_state,
             reminders: Vec::new(),
+            config: config::Config::default(),
             last_fired: HashMap::new(),
             menu_rx,
             tray_event_rx,
@@ -389,9 +455,16 @@ impl eframe::App for App {
                     );
                     self.popups.push(popup::PopupHandle::new(fire, position));
                 }
-                UiMessage::Snapshot(reminders) => {
-                    info!(count = reminders.len(), "main window snapshot updated");
+                UiMessage::Snapshot(SnapshotPayload { reminders, config }) => {
+                    info!(
+                        reminders = reminders.len(),
+                        chime = config.chime,
+                        speak = config.speak,
+                        popup_position = config.popup_position.as_str(),
+                        "main window snapshot updated"
+                    );
                     self.reminders = reminders;
+                    self.config = config;
                 }
                 UiMessage::LastFired { schedule, at } => {
                     self.last_fired.insert(schedule, at);
@@ -445,6 +518,7 @@ impl eframe::App for App {
             ui,
             &mut self.window_state,
             &self.reminders,
+            &self.config,
             &self.last_fired,
         );
         for action in actions {

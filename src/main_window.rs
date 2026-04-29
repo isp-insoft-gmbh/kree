@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Local};
 use eframe::egui;
 
+use crate::config::Config;
 use crate::parser::Reminder;
 
 pub const WIDTH: f32 = 980.0;
@@ -22,8 +23,10 @@ pub fn render(
     ui: &mut egui::Ui,
     state: &mut MainWindowState,
     reminders: &[Reminder],
+    _config: &Config,
     last_fired: &HashMap<String, DateTime<Local>>,
 ) -> Vec<MainWindowAction> {
+    // `_config` will be read by the settings panel that lands in T3 step 3.
     let mut actions = Vec::new();
 
     egui::Frame::default()

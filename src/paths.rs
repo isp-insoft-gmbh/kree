@@ -21,6 +21,10 @@ pub fn reminders_path() -> Result<PathBuf> {
     Ok(data_dir()?.join("reminders.txt"))
 }
 
+pub fn config_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join("config.toml"))
+}
+
 /// Path to the most recent log file, by lexicographic filename order
 /// (`tracing-appender` rolls daily as `app.log.YYYY-MM-DD`, so a string
 /// compare gives the newest). `None` if the logs directory is empty

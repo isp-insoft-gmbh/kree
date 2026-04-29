@@ -25,6 +25,14 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# Configuration: serde + toml for typed reads, toml_edit for
+# format-preserving writes. All three are already in Cargo.lock as
+# transitives — listing them directly so the GUI write path can
+# round-trip user comments and unknown keys without breaking them.
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+toml_edit = "0.25"
+
 # Async runtime — used only for scheduler timers + mpsc to UI
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "signal"] }
 
