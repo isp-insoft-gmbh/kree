@@ -190,6 +190,22 @@ fn open_editor() -> Result<()> {
     editor::open(&path)
 }
 
+/// Open the most recent log file in the OS default handler (typically
+/// Notepad on Windows). Falls back to opening the logs directory when
+/// nothing has been written yet.
+fn open_log() -> Result<()> {
+    let target = match paths::latest_log_file()? {
+        Some(p) => p,
+        None => paths::logs_dir()?,
+    };
+    info!(path = %target.display(), "opening log target");
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", target.to_str().unwrap_or("")])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("spawning shell open: {e}"))
+}
+
 fn load_reminders(path: &std::path::Path) -> Vec<parser::Reminder> {
     match std::fs::read_to_string(path) {
         Ok(contents) => {
@@ -325,10 +341,14 @@ impl eframe::App for App {
                 info!("Quit menu clicked; closing root viewport");
                 self.quitting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            } else if id == &self.tray.edit_id
-                && let Err(e) = open_editor()
+            } else if id == &self.tray.edit_id {
+                if let Err(e) = open_editor() {
+                    warn!(error = %e, "edit reminders failed");
+                }
+            } else if id == &self.tray.log_id
+                && let Err(e) = open_log()
             {
-                warn!(error = %e, "edit reminders failed");
+                warn!(error = %e, "open log failed");
             }
         }
 

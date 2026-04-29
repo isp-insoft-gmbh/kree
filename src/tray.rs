@@ -13,6 +13,7 @@ const TRAY_ICON_PAUSED_BYTES: &[u8] = include_bytes!("../assets/tray-icon-paused
 pub struct Tray {
     icon: TrayIcon,
     pub edit_id: MenuId,
+    pub log_id: MenuId,
     pub quit_id: MenuId,
     active_icon: Icon,
     paused_icon: Icon,
@@ -37,6 +38,10 @@ pub fn build() -> Result<Tray> {
     menu.append(&edit)
         .context("appending Edit Reminders menu item")?;
 
+    let log = MenuItem::new("Open Log", true, None);
+    let log_id = log.id().clone();
+    menu.append(&log).context("appending Open Log menu item")?;
+
     let quit = MenuItem::new("Quit", true, None);
     let quit_id = quit.id().clone();
     menu.append(&quit).context("appending Quit menu item")?;
@@ -51,6 +56,7 @@ pub fn build() -> Result<Tray> {
     Ok(Tray {
         icon: tray,
         edit_id,
+        log_id,
         quit_id,
         active_icon,
         paused_icon,
