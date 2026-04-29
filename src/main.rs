@@ -1,5 +1,8 @@
 mod logging;
+mod parser;
 mod paths;
+
+use std::io::ErrorKind;
 
 use anyhow::Result;
 use single_instance::SingleInstance;
@@ -22,5 +25,31 @@ fn main() -> Result<()> {
     };
 
     info!("kree starting (user={user})");
+
+    let reminders_file = paths::reminders_path()?;
+    match std::fs::read_to_string(&reminders_file) {
+        Ok(contents) => {
+            let report = parser::parse(&contents);
+            for (line, err) in &report.errors {
+                warn!(line, error = %err, "skipping invalid reminder");
+            }
+            info!(
+                path = %reminders_file.display(),
+                count = report.reminders.len(),
+                "loaded reminders"
+            );
+            for r in &report.reminders {
+                info!(schedule = %r.schedule, icon = %r.icon, body = %r.body, "reminder");
+            }
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            info!(
+                path = %reminders_file.display(),
+                "no reminders file yet — create it to start scheduling"
+            );
+        }
+        Err(e) => return Err(e.into()),
+    }
+
     Ok(())
 }
