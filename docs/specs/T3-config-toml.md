@@ -157,6 +157,12 @@ Pure-logic functions get unit tests:
 - `Config::eq`: two parsed `Config`s with identical typed values are
   equal, regardless of formatting differences in the source TOML.
   Backs the no-broadcast guard above.
+- **Byte-identical no-op round-trip.** Load a fixture with
+  comments + unknown keys + odd whitespace + a final-newline,
+  write it back without mutating any keys, assert
+  `bytes_in == bytes_out`. Off-by-one trailing-newline mismatches
+  are the classic failure mode — they'd make every GUI write
+  produce a real diff and re-trigger the watcher.
 
 ## Acceptance
 
@@ -182,6 +188,23 @@ Pure-logic functions get unit tests:
   produce reload feedback loops (we write → watcher fires → reparse
   → no diff → no further write — safe). Verify by ensuring the writer
   side doesn't push a `Snapshot` that re-triggers a write.
+
+## Implementation order (3 commits)
+
+T3 lands as three atomic commits — each green at `cargo clippy
+--all-targets -- -D warnings` + `cargo test`. Splitting limits blast
+radius if any one step regresses.
+
+1. `config: parse, write, watch` — new `src/config.rs` + `Config`
+   plumbed through the existing watcher's reload signal. No
+   behavior changes yet; chime/speak/position gates still always
+   on at default config.
+2. `config: gate chime / speak / popup_position` — wire the
+   existing `handle_fire` and `popup::compute_position` use
+   sites. Default config behaves identical to current `main`.
+3. `main_window: settings panel` — checkboxes + combo box,
+   dispatch `ConfigPatch` actions, GUI writes round-trip the
+   file.
 
 ## Out of scope
 

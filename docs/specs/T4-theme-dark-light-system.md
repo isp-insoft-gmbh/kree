@@ -74,11 +74,22 @@ task that loops, reads the registry, and pushes a
 1 s is the worst-case latency; 1 s of CPU per second on a registry
 read is negligible.
 
-The poll task respects shutdown: it `tokio::select!`s between the
-1 s tick and a `tokio::sync::watch::Receiver<()>` that the main
-shutdown path closes when eframe exits. Without this the
-`runtime.shutdown_timeout(2s)` in `main` would have to wait for the
-sleep to fire before the task could observe shutdown.
+### Unify shutdown signal
+
+T4 introduces a second long-lived background task (the registry
+poller). The existing `main.rs` uses `oneshot::Receiver<()>` for
+"runtime is exiting" — but `oneshot::Receiver` is single-consumer,
+so a second observer can't share it.
+
+Change as part of T4: replace the oneshot with
+`tokio::sync::watch::channel(false)`. The eframe-exit path sends
+`true`; every long-lived task (`run_async`'s scheduler bridge, the
+theme poller, and any future task that needs to drop cleanly)
+`tokio::select!`s between its work and a watcher receiver.
+
+Note: this strictly is T4 work, but commit it as a separate
+prerequisite commit `runtime: unify shutdown to a watch channel`
+so the diff stays understandable.
 
 ## GUI
 
