@@ -7,6 +7,7 @@ mod parser;
 mod paths;
 mod popup;
 mod scheduler;
+mod theme;
 mod tray;
 mod watcher;
 
@@ -99,7 +100,10 @@ fn main() -> Result<()> {
     let run_result = eframe::run_native(
         "kree",
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(ui_rx, reload_tx, paused)?))),
+        Box::new(move |cc| {
+            theme::apply(&cc.egui_ctx);
+            Ok(Box::new(App::new(ui_rx, reload_tx, paused)?))
+        }),
     );
 
     info!("eframe loop exited; shutting down runtime");

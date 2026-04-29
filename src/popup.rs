@@ -82,6 +82,9 @@ impl PopupHandle {
 
         let popup = Arc::clone(&self.inner);
         ctx.show_viewport_deferred(viewport_id, builder, move |ctx, _class| {
+            // Each viewport carries its own Context, so the theme applied
+            // to the root viewport doesn't propagate. Re-apply per frame.
+            crate::theme::apply(ctx);
             render(ctx, &popup);
         });
 
