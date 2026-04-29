@@ -10,6 +10,7 @@ mod scheduler;
 mod tray;
 mod watcher;
 
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +32,10 @@ use crate::scheduler::{ReminderEvent, Scheduler};
 pub enum UiMessage {
     Fire(UiFire),
     Snapshot(Vec<parser::Reminder>),
+    LastFired {
+        schedule: String,
+        at: DateTime<Local>,
+    },
 }
 
 #[derive(Debug)]
@@ -176,6 +181,11 @@ fn handle_fire(
         }
     });
 
+    let _ = ui_tx.send(UiMessage::LastFired {
+        schedule: event.schedule.clone(),
+        at: event.fired_at,
+    });
+
     let fire = UiFire {
         icon: event.icon,
         body: event.body,
@@ -237,6 +247,7 @@ struct App {
     quitting: bool,
     window_state: main_window::MainWindowState,
     reminders: Vec<parser::Reminder>,
+    last_fired: HashMap<String, DateTime<Local>>,
 }
 
 impl App {
@@ -261,6 +272,7 @@ impl App {
             quitting: false,
             window_state,
             reminders: Vec::new(),
+            last_fired: HashMap::new(),
         })
     }
 
@@ -330,6 +342,9 @@ impl eframe::App for App {
                     info!(count = reminders.len(), "main window snapshot updated");
                     self.reminders = reminders;
                 }
+                UiMessage::LastFired { schedule, at } => {
+                    self.last_fired.insert(schedule, at);
+                }
             }
         }
 
@@ -370,7 +385,12 @@ impl eframe::App for App {
         }
 
         if self.main_visible {
-            let actions = main_window::render(ui, &mut self.window_state, &self.reminders);
+            let actions = main_window::render(
+                ui,
+                &mut self.window_state,
+                &self.reminders,
+                &self.last_fired,
+            );
             for action in actions {
                 self.handle_main_window_action(action);
             }

@@ -1,4 +1,6 @@
-use chrono::Local;
+use std::collections::HashMap;
+
+use chrono::{DateTime, Local};
 use eframe::egui;
 
 use crate::parser::Reminder;
@@ -20,6 +22,7 @@ pub fn render(
     ui: &mut egui::Ui,
     state: &mut MainWindowState,
     reminders: &[Reminder],
+    last_fired: &HashMap<String, DateTime<Local>>,
 ) -> Vec<MainWindowAction> {
     let mut actions = Vec::new();
 
@@ -85,10 +88,11 @@ pub fn render(
                         .unwrap_or_else(|_| "—".into());
                     ui.label(next);
 
-                    // "Last fired" needs cross-thread state from the
-                    // scheduler. Step 11 leaves it as a placeholder;
-                    // step 15 polish can wire it.
-                    ui.label(egui::RichText::new("—").weak());
+                    let last = match last_fired.get(&reminder.schedule) {
+                        Some(t) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
+                        None => "—".into(),
+                    };
+                    ui.label(last);
                     ui.end_row();
                 }
             });
