@@ -1,0 +1,69 @@
+name: Outdated dependencies
+
+on:
+  schedule:
+    # Mondays 09:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  outdated:
+    name: Check for outdated crates
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-outdated
+        run: cargo install cargo-outdated --locked
+      - name: Run cargo-outdated
+        id: outdated
+        shell: bash
+        run: |
+          set +e
+          OUTPUT=$(cargo outdated -R --exit-code 1)
+          STATUS=$?
+          echo "$OUTPUT"
+          {
+            echo "report<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          # Always succeed; outdated crates aren't a build failure
+          exit 0
+      - name: Open or update issue
+        if: steps.outdated.outputs.status != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const report = `${{ steps.outdated.outputs.report }}`;
+            const title = "Outdated dependencies detected";
+            const body = `Weekly \`cargo outdated -R\` report:\n\n\`\`\`\n${report}\n\`\`\`\n`;
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "dependencies",
+            });
+            const existing = issues.data.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["dependencies"],
+              });
+            }

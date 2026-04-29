@@ -1,0 +1,34 @@
+# Lefthook config — install with `lefthook install`.
+# Hooks no-op when relevant files aren't staged or Cargo.toml doesn't exist yet.
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --all-targets -- -D warnings
+
+pre-push:
+  commands:
+    test:
+      run: |
+        if [ -f Cargo.toml ]; then
+          cargo test --all-features
+        fi
+
+commit-msg:
+  commands:
+    style:
+      # Enforce: '<area>: <imperative summary>' (lowercase area, e.g. 'parser: handle ...').
+      # Allow merge / revert commits to bypass.
+      run: |
+        subject=$(head -1 "{1}")
+        if echo "$subject" | grep -qE '^(Merge |Revert |[a-z][a-z0-9_-]*: .+)'; then
+          exit 0
+        fi
+        echo "Commit subject must match '<area>: <imperative summary>' (lowercase area)."
+        echo "Got: $subject"
+        exit 1
