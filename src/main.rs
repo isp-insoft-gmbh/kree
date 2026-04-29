@@ -315,6 +315,11 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Re-assert visuals every frame. eframe / egui's default Style
+        // can leak through if we only set it in the creator closure
+        // (some viewport / hidden-window paths have been observed to
+        // reset style fields). Idempotent.
+        theme::apply(&ctx);
 
         if ctx.input(|i| i.viewport().close_requested()) {
             // Window-X always means "hide to tray". Real exit goes
@@ -385,6 +390,11 @@ impl eframe::App for App {
                 if self.main_visible {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
+                // Force an immediate repaint so the new visibility +
+                // freshly-rendered content land in the same frame the
+                // user perceives as "click → window appears with
+                // contents", not "click → empty window then content".
+                ctx.request_repaint();
             }
         }
 
@@ -402,6 +412,10 @@ impl eframe::App for App {
 
         self.popups.retain_mut(|popup| popup.show(&ctx));
 
-        ctx.request_repaint_after(Duration::from_millis(100));
+        // egui only repaints on input by default; we drive it so try_recv
+        // keeps draining, 30s auto-dismiss fires on time, and Quit clicks
+        // surface within one tick. 33 ms ≈ 30 fps — plenty for our use,
+        // and "Quit takes a frame" no longer feels sluggish.
+        ctx.request_repaint_after(Duration::from_millis(33));
     }
 }

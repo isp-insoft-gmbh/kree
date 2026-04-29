@@ -48,6 +48,7 @@ pub fn build() -> Result<Tray> {
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
         .with_tooltip("kree")
         .with_icon(active_icon.clone())
         .build()
