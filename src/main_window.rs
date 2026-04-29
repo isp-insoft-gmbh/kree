@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Local};
 use eframe::egui;
 
-use crate::config::Config;
+use crate::config::{Config, ConfigPatch, PopupPosition};
 use crate::parser::Reminder;
 
 pub const WIDTH: f32 = 980.0;
@@ -23,10 +23,9 @@ pub fn render(
     ui: &mut egui::Ui,
     state: &mut MainWindowState,
     reminders: &[Reminder],
-    _config: &Config,
+    config: &Config,
     last_fired: &HashMap<String, DateTime<Local>>,
 ) -> Vec<MainWindowAction> {
-    // `_config` will be read by the settings panel that lands in T3 step 3.
     let mut actions = Vec::new();
 
     egui::Frame::default()
@@ -90,6 +89,52 @@ pub fn render(
 
             ui.add_space(14.0);
             ui.separator();
+            ui.add_space(10.0);
+
+            // Settings panel — bidirectional with config.toml. Edits
+            // here are persisted via `ConfigPatch` actions; manual file
+            // edits hot-reload through the watcher.
+            ui.label(
+                egui::RichText::new("Settings")
+                    .strong()
+                    .size(13.0)
+                    .color(egui::Color32::from_rgb(0xc9, 0xb6, 0xeb)),
+            );
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+
+                let mut chime = config.chime;
+                if ui.checkbox(&mut chime, "Chime").changed() {
+                    actions.push(MainWindowAction::SetConfig(ConfigPatch::Chime(chime)));
+                }
+
+                let mut speak = config.speak;
+                if ui.checkbox(&mut speak, "Speak").changed() {
+                    actions.push(MainWindowAction::SetConfig(ConfigPatch::Speak(speak)));
+                }
+
+                ui.label("Popup:");
+                let mut chosen: Option<PopupPosition> = None;
+                egui::ComboBox::from_id_salt("popup_position")
+                    .selected_text(config.popup_position.as_str())
+                    .show_ui(ui, |ui| {
+                        for &pos in PopupPosition::ALL {
+                            if ui
+                                .selectable_label(pos == config.popup_position, pos.as_str())
+                                .clicked()
+                            {
+                                chosen = Some(pos);
+                            }
+                        }
+                    });
+                if let Some(p) = chosen {
+                    actions.push(MainWindowAction::SetConfig(ConfigPatch::PopupPosition(p)));
+                }
+            });
+
+            ui.add_space(14.0);
+            ui.separator();
             ui.add_space(14.0);
 
             if reminders.is_empty() {
@@ -147,4 +192,5 @@ pub enum MainWindowAction {
     Reload,
     SetPaused(bool),
     SetAutostart(bool),
+    SetConfig(ConfigPatch),
 }

@@ -429,7 +429,35 @@ impl App {
                     }
                 }
             }
+            main_window::MainWindowAction::SetConfig(patch) => {
+                // Optimistic local update so the UI reflects the change
+                // immediately. The watcher echo from the disk write will
+                // re-broadcast the same Snapshot via the feedback-loop
+                // guard's no-op path.
+                apply_patch_local(&mut self.config, patch);
+
+                let path = match paths::config_path() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!(error = %e, "could not resolve config path; skipping write");
+                        return;
+                    }
+                };
+                if let Err(e) = config::apply_patch(&path, patch) {
+                    warn!(error = %e, ?patch, "config write failed");
+                } else {
+                    info!(?patch, "config written");
+                }
+            }
         }
+    }
+}
+
+fn apply_patch_local(config: &mut config::Config, patch: config::ConfigPatch) {
+    match patch {
+        config::ConfigPatch::Chime(v) => config.chime = v,
+        config::ConfigPatch::Speak(v) => config.speak = v,
+        config::ConfigPatch::PopupPosition(p) => config.popup_position = p,
     }
 }
 
