@@ -1,3 +1,4 @@
+mod audio;
 mod logging;
 mod parser;
 mod paths;
@@ -72,6 +73,7 @@ async fn run_async(shutdown: oneshot::Receiver<()>) -> Result<()> {
                 fired_at = %event.fired_at,
                 "reminder fired"
             );
+            audio::play_chime();
         }
     });
 
