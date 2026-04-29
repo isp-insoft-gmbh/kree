@@ -26,3 +26,10 @@ Open follow-ups not covered by the spec or the current commit history.
   the Windows app-mode registry key
   (`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme`)
   and updating on change.
+- [ ] **Optimized release profile.** Add a `[profile.release]`
+  block to `Cargo.toml` with `lto = "fat"`, `codegen-units = 1`,
+  `strip = "symbols"`, `panic = "abort"`, and `opt-level = "z"`
+  (size-first — kree is GUI / I/O bound, not hot-loop CPU).
+  Measure before / after on `kree.exe`; expect a meaningful drop
+  from the current debug-build size. Land alongside the release
+  CI item so the workflow benefits.
