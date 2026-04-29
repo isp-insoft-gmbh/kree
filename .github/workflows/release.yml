@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Two tags pushed in quick succession would otherwise produce two parallel
+# runs that race on the same GitHub release. Don't cancel in progress —
+# a half-uploaded asset is worse than waiting.
+concurrency:
+  group: "release-${{ github.ref }}"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-release:
+    name: Build & publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Verify artifact exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target/release/kree.exe)) {
+            throw "kree.exe missing — release build did not produce the artifact."
+          }
+          Get-Item target/release/kree.exe | Format-List Name, Length, LastWriteTime
+
+      - name: Determine prerelease flag
+        id: prerelease
+        shell: pwsh
+        run: |
+          # Mark the GitHub release as prerelease when the tag carries a
+          # SemVer pre-release segment (e.g. v0.1.0-alpha.1).
+          if ('${{ github.ref_name }}' -match '-') {
+            "is_prerelease=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "is_prerelease=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+          files: |
+            target/release/kree.exe
+            assets/fonts/LICENSE-JetBrainsMono-OFL.txt
+            assets/fonts/LICENSE-NerdFonts-MIT.txt
