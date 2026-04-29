@@ -37,10 +37,14 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Windows integration
 single-instance = "0.3"
 auto-launch = "0.6"
-# Win32 GetMessage loop on the main thread (host for tray-icon and,
-# eventually, popup windows). Step 9 will route messages via eframe/winit
-# instead, but until then we pump them ourselves.
-windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
+# Win32 work-area lookup for popup-anchor fallback when the tray rect is
+# unavailable. Step 6 originally used this for a manual GetMessage loop;
+# step 9 hands the loop to eframe/winit but keeps the system-parameters
+# call for popup positioning.
+windows = { version = "0.62", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+] }
 
 # Emoji extraction
 unicode-segmentation = "1"

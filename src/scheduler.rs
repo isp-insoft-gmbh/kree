@@ -37,8 +37,10 @@ impl Scheduler {
         }
         Self { handles }
     }
+}
 
-    pub fn shutdown(self) {
+impl Drop for Scheduler {
+    fn drop(&mut self) {
         for h in &self.handles {
             h.abort();
         }
