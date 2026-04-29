@@ -16,9 +16,10 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Async runtime — used only for scheduler timers + mpsc to UI
-tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "signal"] }
 
 # Cron parsing / file watching / paths / editor
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 croner = "3"
 notify-debouncer-mini = "0.7"
 directories = "6"
