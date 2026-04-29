@@ -55,9 +55,13 @@ Rationale per knob:
 
 ## Measurements
 
-(filled in at implementation time)
+Local Windows 11 / rustc 1.95 — `release` profile of the
+`auto/todos` branch:
 
-- Before: `_____` bytes
-- After: `_____` bytes
-- Build time before: `_____`
-- Build time after: `_____`
+| profile                                               | bytes        | size   | wall-clock |
+|-------------------------------------------------------|--------------|--------|------------|
+| baseline (`opt-level = 3` default)                    | 19,506,688   | 18.6 MB | ~unmeasured (cached) |
+| optimized, `opt-level = "z"`                          | 13,141,504   | 12.5 MB | 3 m 04 s   |
+| optimized, `opt-level = "s"` (chosen)                 | 12,474,368   | 11.9 MB | 3 m 18 s   |
+
+`s` won by 667 KB. Final shipped Cargo.toml uses `opt-level = "s"`.

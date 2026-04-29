@@ -7,6 +7,16 @@ description = "Cron-scheduled reminders in your Windows tray."
 authors = ["Oliver Krylow <o.krylow@isp-insoft.de>"]
 publish = false
 
+# Size-first release profile. kree is GUI / I/O bound, not hot-loop
+# CPU, so trading a bit of throughput for smaller binaries is the
+# right call. See docs/specs/T1-optimized-release-profile.md.
+[profile.release]
+opt-level = "s"     # size-first; sometimes beats "z" by re-enabling vectorization
+lto = "fat"         # whole-program inlining; biggest single size win
+codegen-units = 1   # one unit = better cross-module optimization
+strip = "symbols"   # drop debug + symbol tables from the final binary
+panic = "abort"     # no unwinding tables; we exit cleanly via process::exit
+
 [dependencies]
 # Errors / logging
 anyhow = "1"
