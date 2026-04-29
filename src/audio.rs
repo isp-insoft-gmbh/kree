@@ -14,18 +14,41 @@ const PLAYBACK_HOLD: Duration = Duration::from_millis(700);
 /// but never propagate — a missing audio device must not break reminders.
 pub fn play_chime() {
     std::thread::spawn(|| {
-        if let Err(e) = play_inner() {
+        if let Err(e) = play_chime_inner() {
             warn!(error = %e, "chime playback failed");
         }
     });
 }
 
-fn play_inner() -> Result<()> {
+fn play_chime_inner() -> Result<()> {
     let stream_handle = rodio::DeviceSinkBuilder::open_default_sink()?;
     let mixer = stream_handle.mixer();
     let _player = rodio::play(mixer, Cursor::new(CHIME_BYTES))?;
     // Block long enough for the chime to finish before the handle drops
     // and the device closes.
     std::thread::sleep(PLAYBACK_HOLD);
+    Ok(())
+}
+
+/// Speak the given text aloud via the system TTS engine on a worker
+/// thread. Same fire-and-forget posture as [`play_chime`]: failures are
+/// logged but never propagate.
+pub fn speak(text: String) {
+    std::thread::spawn(move || {
+        if let Err(e) = speak_inner(&text) {
+            warn!(error = %e, text = %text, "TTS failed");
+        }
+    });
+}
+
+fn speak_inner(text: &str) -> Result<()> {
+    let mut engine = tts::Tts::default()?;
+    engine.speak(text, false)?;
+    // Poll until SAPI is done — dropping the engine mid-utterance cancels
+    // the speech, so we keep this worker thread parked until the engine
+    // is idle.
+    while engine.is_speaking()? {
+        std::thread::sleep(Duration::from_millis(50));
+    }
     Ok(())
 }

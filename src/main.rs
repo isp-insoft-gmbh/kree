@@ -74,6 +74,16 @@ async fn run_async(shutdown: oneshot::Receiver<()>) -> Result<()> {
                 "reminder fired"
             );
             audio::play_chime();
+
+            // Step-8 stub: popup-visible always returns true; step 9
+            // will replace this with the real popup-state check.
+            let body = event.body.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if popup_visible_stub() {
+                    audio::speak(body);
+                }
+            });
         }
     });
 
@@ -81,6 +91,12 @@ async fn run_async(shutdown: oneshot::Receiver<()>) -> Result<()> {
     sched.shutdown();
     receiver.abort();
     Ok(())
+}
+
+/// Step-8 placeholder for "is the popup still on screen?". Replaced by a
+/// real check against popup state once step 9 lands.
+fn popup_visible_stub() -> bool {
+    true
 }
 
 fn load_reminders() -> Result<Vec<parser::Reminder>> {
