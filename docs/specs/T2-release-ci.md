@@ -34,6 +34,18 @@ Tag a commit `v*`, get a GitHub release with a built `kree.exe` attached.
 `contents: write` only — needed by `action-gh-release` to publish.
 No `packages: write`, no other scopes.
 
+## Concurrency
+
+```yaml
+concurrency:
+  group: "release-${{ github.ref }}"
+  cancel-in-progress: false
+```
+
+Two tags pushed in quick succession would otherwise produce two parallel
+runs that race on the same release. Don't cancel in progress — a
+half-uploaded asset is worse than waiting.
+
 ## Acceptance
 
 1. Workflow YAML passes `actionlint` (best-effort — we don't run it

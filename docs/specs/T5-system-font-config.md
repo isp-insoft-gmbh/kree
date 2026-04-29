@@ -31,20 +31,27 @@ For each named family, find a TTF/OTF/TTC file by either:
    Parse each font's `name` table (record IDs 1, 4, 16) and match
    against the requested family name.
 
-**Decision: filesystem scan.** Single mechanism, no platform-specific
-FFI beyond what we already pull through `windows`. Use a small
-crate for `name` table parsing — `read-fonts` (already a transitive
-dep of egui via `skrifa`) exposes the OpenType name table.
-**Alternative:** `font-kit` does the whole job in one call but is a
-larger dep; if `read-fonts` isn't ergonomic enough for direct use,
-`font-kit` is the fallback.
+**Decision: filesystem scan + `ttf-parser` for the `name` table.**
+`ttf-parser` is already in `Cargo.lock` as a transitive (egui →
+ab_glyph), pinned at `0.25` upstream. We add it as a direct
+dependency at `ttf-parser = "0.25"`. It exposes `Face::from_slice`
+and `name_table()` which is sufficient for what we need (record IDs
+1, 4, 16; platform 3 = Windows).
+
+Note: `read-fonts` is also in `Cargo.lock` (via `skrifa`) but its
+API surface is more general-purpose than what we need; `ttf-parser`
+is the smaller fit. This is a deliberate divergence from the original
+spec language that mentioned `read-fonts`.
 
 ## Loader changes (`src/theme.rs`)
 
 `install_fonts(ctx, &Config)`:
 
-1. Scan font directories once (lazy static / `OnceLock`) into a
-   `HashMap<family_name_lower, PathBuf>`.
+1. Scan font directories once (`OnceLock`) into a
+   `HashMap<family_name_lower, PathBuf>`. **Known limitation**: the
+   index is built at first use and *not* refreshed if the user
+   installs new fonts mid-run. Acceptable — the user can restart
+   kree. Documented inline + in the code comment.
 2. For each requested family in `config.font.{proportional,monospace}`,
    look up the path; on hit, prepend its bytes to the matching egui
    `FontFamily`.
@@ -61,14 +68,25 @@ that `set_fonts` rebuilds the egui font atlas — this is mildly
 expensive but acceptable since reloads are user-initiated (not per
 frame).
 
+## Crate versions
+
+Add to `Cargo.toml`:
+
+| crate         | pin    | features | notes |
+|---------------|--------|----------|-------|
+| `ttf-parser`  | `"0.25"` | default | Already in `Cargo.lock` as a transitive — confirmed via `grep ttf-parser Cargo.lock`. |
+
 ## Tests
 
 - `enumerate_system_fonts` returns at least one entry on Windows
-  (smoke; uses `C:\Windows\Fonts\segoeui.ttf` as a known-present
-  family name to assert on).
-- `resolve_family("Segoe UI")` finds a `PathBuf`. Skipped on non-Windows.
+  (smoke; the test guard-skips on non-Windows).
+- `resolve_family("Segoe UI")` finds a `PathBuf` ending in
+  `segoeui.ttf` (case-insensitive). Skipped on non-Windows.
 - `resolve_family("Definitely Not A Real Family 12345")` returns
   `None`.
+- `decode_name_table` (pure function): given the bytes of
+  `segoeui.ttf`, returns `Some("Segoe UI")` (or its localized
+  equivalent — assert prefix `"Segoe UI"`).
 - TTC support: at least probed (a TTC contains multiple faces — we
   pick face index 0 unless a config sub-key specifies otherwise; out
   of scope for this commit, document as TODO).

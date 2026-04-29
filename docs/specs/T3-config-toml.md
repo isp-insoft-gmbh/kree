@@ -29,6 +29,18 @@ popup_position = "tray"
 `left_center`, `center`, `right_center`,
 `bottom_left`, `bottom_center`, `bottom_right`.
 
+## Crate versions (per CLAUDE.md rule 4 — pin coarse, list before impl)
+
+Add to `Cargo.toml` `[dependencies]`:
+
+| crate       | pin    | features                | notes |
+|-------------|--------|-------------------------|-------|
+| `serde`     | `"1"`  | `["derive"]`            | Already in `Cargo.lock` as a transitive. |
+| `toml`      | `"1"`  | default                 | Latest is `1.1`; coarse pin per house style. |
+| `toml_edit` | `"0.25"` | default               | Format-preserving editor. |
+
+`anyhow` + `thiserror` already declared.
+
 ## Read path (parse, lossy is OK)
 
 - `serde` + `toml` for *reading* into a strongly-typed `Config`
@@ -70,6 +82,22 @@ with `#[serde(default)]`. Or use `#[serde(default = "fn")]`.)
   UI. (Currently the snapshot is `Vec<Reminder>` — extend to a
   small struct.)
 
+### Feedback-loop guard
+
+The atomic write (temp file + rename) the GUI uses **will** fire the
+debouncer. Mitigation:
+
+- After a GUI write, the writer task records a `last_self_write_at:
+  Instant` timestamp on a shared `Arc<Mutex<Option<Instant>>>`.
+- On the reload-rx side, when a reload event arrives, compare the
+  parsed `Config` against the in-memory `Config`. If equal, drop the
+  event (no re-broadcast, no re-write attempt). Equality check is on
+  the typed `Config` struct, so unrelated formatting changes still
+  round-trip.
+
+A unit test asserts the no-op behavior: write same config back,
+reload event arrives, no `Snapshot` pushed.
+
 ## GUI
 
 Add a "Settings" section above the reminders table in `main_window.rs`:
@@ -81,13 +109,33 @@ Add a "Settings" section above the reminders table in `main_window.rs`:
 Each control change sends a `MainWindowAction::SetConfig(ConfigPatch)`
 to the App, which forwards through tokio → `toml_edit` → file.
 
-## Use sites
+## Use sites (concrete)
 
-- `audio::play_chime()` — caller passes `if config.chime { play_chime() }`.
-- 2 s TTS task — `if config.speak { ... }`.
-- `popup::compute_position` — branch on `config.popup_position`. The
-  10-anchor enum maps to a screen-rect anchor. `tray` keeps the
-  current behavior (rect from `tray-icon`, fallback bottom-right).
+Both gates currently fire unconditionally in `src/main.rs::handle_fire`
+(audio::play_chime around line 184, audio::speak around line 192). Wire
+each gate to the live `Config` snapshot held by the tokio side:
+
+- `handle_fire(runtime, ui_tx, event, &Config)` — accept the config
+  by reference.
+- `if config.chime { audio::play_chime() }` — line 184 use site.
+- `if config.speak { ... audio::speak(...) }` — wraps the spawned 2 s
+  TTS task; gating happens inside the spawned task (so the 2 s timer
+  + popup-visible check still runs even when speak is off — just no
+  speech at the end). Decision: gate at task spawn, skip the timer
+  entirely when speak is disabled.
+
+The shared `Config` lives behind `Arc<RwLock<Config>>` on the tokio
+side; the reload path replaces it on file change.
+
+### Popup positioning
+
+`popup::compute_position` gains a `position: PopupPosition` arg. The
+9 fixed anchors compute coordinates from
+`SystemParametersInfoW(SPI_GETWORKAREA)` (we already use this for the
+`tray` fallback). `tray` keeps the current logic. Stacking math
+(step 10) anchors to the chosen corner — top-anchored positions stack
+*downward*, bottom-anchored stack *upward*, center positions stack
+upward, sides stack toward the screen center.
 
 ## Tests
 
@@ -102,7 +150,13 @@ Pure-logic functions get unit tests:
   `chime = false`, expect output retains the comments + unknown key
   unchanged.
 - `popup::compute_position` returns expected coordinates for the
-  9 fixed anchors against a fake 1920×1080 work area.
+  9 fixed anchors against a fake 1920×1080 work area. Each corner
+  asserts a specific `(x, y)` within 1 px tolerance.
+- `apply_patch` writing the *same* value back is idempotent and
+  emits no diff (used to verify the feedback-loop guard).
+- `Config::eq`: two parsed `Config`s with identical typed values are
+  equal, regardless of formatting differences in the source TOML.
+  Backs the no-broadcast guard above.
 
 ## Acceptance
 
@@ -113,8 +167,14 @@ Pure-logic functions get unit tests:
 4. Hand-edited comments survive a GUI write — verified by a unit
    test, not by hand.
 5. Unknown keys survive a GUI write.
-6. Popup at `bottom_right` lands within 16 px of the bottom-right
-   corner of the primary monitor work area.
+6. Popup at `bottom_right` produces a top-left position whose
+   `x = work_area.right - POPUP_WIDTH - 16` and
+   `y = work_area.bottom - POPUP_HEIGHT - 16`, asserted with 1 px
+   tolerance against a faked work-area rect in tests.
+7. Toggling `chime = false` in the GUI silences the chime on the
+   next fire (verified at runtime, not in tests).
+8. Toggling `speak = false` skips the 2 s TTS task entirely on the
+   next fire (verified at runtime).
 
 ## Risks
 

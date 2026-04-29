@@ -32,13 +32,14 @@ Rationale per knob:
 
 1. `cargo build --release` succeeds.
 2. `cargo clippy --all-targets --release -- -D warnings` succeeds.
-3. `cargo test --release` succeeds (panic=abort is permitted in tests since
-   Rust 1.60+ via `-Z panic-abort-tests` is **not** required at stable; tests
-   use the `#[should_panic]` machinery which works with the dev profile).
-   *Note*: tests run under the **dev** profile by default — `panic=abort`
-   on release does not break `cargo test`.
-4. **Measure**: record `kree.exe` size before and after. Append the numbers
-   to this spec when done.
+3. `cargo test` (dev profile, default) continues to pass — `panic = "abort"`
+   only applies to the release profile. We deliberately **do not** run
+   `cargo test --release`: `#[should_panic]` requires unwinding, which
+   `panic = "abort"` strips, and `-Z panic-abort-tests` is nightly-only.
+4. **Measure**: record `kree.exe` size before and after. Try both
+   `opt-level = "z"` and `opt-level = "s"`; pick whichever is smaller
+   (sometimes `s` wins by a few KB because `z` disables loop vectorization
+   in ways that cost more than they save).
 
 ## Risks
 
