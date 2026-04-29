@@ -2,18 +2,19 @@ mod logging;
 mod parser;
 mod paths;
 mod scheduler;
+mod tray;
 
 use std::io::ErrorKind;
+use std::time::Duration;
 
 use anyhow::Result;
 use single_instance::SingleInstance;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::scheduler::{ReminderEvent, Scheduler};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Hold the guard for the entire process lifetime so the appender flushes on exit.
     let _log_guard = logging::init()?;
 
@@ -31,14 +32,37 @@ async fn main() -> Result<()> {
 
     info!("kree starting (user={user})");
 
+    // Build the tray *before* the runtime; tray-icon registers a hidden
+    // window on this thread, which must be the same thread that pumps
+    // Win32 messages below.
+    let tray = tray::build()?;
+
+    // Tokio runtime lives in a worker thread so the main thread is free
+    // to run the Win32 message loop.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let _runtime_task = runtime.spawn(run_async(shutdown_rx));
+
+    // Block until the user clicks Quit (or the loop fails).
+    tray::run_event_loop(&tray)?;
+
+    info!("shutting down");
+    let _ = shutdown_tx.send(());
+    runtime.shutdown_timeout(Duration::from_secs(2));
+    Ok(())
+}
+
+/// Async lifecycle: load reminders, run scheduler, drain events, wait for
+/// shutdown.
+async fn run_async(shutdown: oneshot::Receiver<()>) -> Result<()> {
     let reminders = load_reminders()?;
     info!(count = reminders.len(), "scheduling reminders");
 
     let (tx, mut rx) = mpsc::channel::<ReminderEvent>(64);
     let sched = Scheduler::spawn(reminders, tx);
 
-    // Receiver loop: log every fire until shutdown. Step 7+ replaces this
-    // with the audio + popup pipeline.
     let receiver = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             info!(
@@ -51,8 +75,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    tokio::signal::ctrl_c().await.ok();
-    info!("ctrl-c received; shutting down");
+    let _ = shutdown.await;
     sched.shutdown();
     receiver.abort();
     Ok(())

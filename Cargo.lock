@@ -2454,6 +2454,7 @@ dependencies = [
  "directories",
  "edit",
  "eframe",
+ "image",
  "notify-debouncer-mini",
  "rodio",
  "single-instance",
@@ -2466,6 +2467,7 @@ dependencies = [
  "tts",
  "unicode-properties",
  "unicode-segmentation",
+ "windows 0.62.2",
 ]
 
 [[package]]
