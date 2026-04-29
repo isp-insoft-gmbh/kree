@@ -200,9 +200,15 @@ pub fn apply(ctx: &egui::Context) {
     widgets.hovered.bg_stroke = Stroke::new(1.5, UI_IMPORTANT_LOCAL);
     widgets.hovered.corner_radius = radius;
 
+    // `widgets.active.fg_stroke.color` is also what egui's
+    // `Visuals::strong_text_color()` resolves to — i.e. it tints every
+    // `RichText::strong()` label, including the table column headers.
+    // Keep it bright (ui.important_global) so strong text reads on the
+    // dark backdrop. The 1.5 px stroke is fine for the
+    // active-button-foreground use it also covers.
     widgets.active.bg_fill = UI_IMPORTANT_LOCAL;
     widgets.active.weak_bg_fill = UI_ACCENT;
-    widgets.active.fg_stroke = Stroke::new(1.5, UI_BACKDROP);
+    widgets.active.fg_stroke = Stroke::new(1.5, UI_IMPORTANT_GLOBAL);
     widgets.active.bg_stroke = Stroke::new(1.5, UI_IMPORTANT_GLOBAL);
     widgets.active.corner_radius = radius;
 
