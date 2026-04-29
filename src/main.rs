@@ -1,4 +1,5 @@
 mod audio;
+mod autostart;
 mod editor;
 mod logging;
 mod main_window;
@@ -213,6 +214,11 @@ impl App {
         reload_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
         let tray = tray::build()?;
+        let mut window_state = main_window::MainWindowState::default();
+        match autostart::is_enabled() {
+            Ok(v) => window_state.autostart = v,
+            Err(e) => warn!(error = %e, "could not read autostart state; assuming off"),
+        }
         Ok(Self {
             tray,
             ui_rx,
@@ -220,7 +226,7 @@ impl App {
             popups: Vec::new(),
             main_visible: false,
             quitting: false,
-            window_state: main_window::MainWindowState::default(),
+            window_state,
             reminders: Vec::new(),
         })
     }
@@ -238,8 +244,18 @@ impl App {
             main_window::MainWindowAction::SetPaused(p) => {
                 info!(paused = p, "Pause toggled (no-op until step 15 polish)");
             }
-            main_window::MainWindowAction::SetAutostart(a) => {
-                info!(autostart = a, "Autostart toggled (no-op until step 14)");
+            main_window::MainWindowAction::SetAutostart(enabled) => {
+                match autostart::set(enabled) {
+                    Ok(()) => info!(enabled, "autostart updated"),
+                    Err(e) => {
+                        warn!(error = %e, enabled, "autostart update failed");
+                        // Keep the checkbox in sync with reality.
+                        match autostart::is_enabled() {
+                            Ok(v) => self.window_state.autostart = v,
+                            Err(e) => warn!(error = %e, "re-querying autostart failed"),
+                        }
+                    }
+                }
             }
         }
     }
