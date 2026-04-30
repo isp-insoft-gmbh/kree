@@ -2,6 +2,7 @@ mod audio;
 mod autostart;
 mod config;
 mod editor;
+mod fonts;
 mod logging;
 mod main_window;
 mod parser;
@@ -120,10 +121,10 @@ fn main() -> Result<()> {
         "kree",
         options,
         Box::new(move |cc| {
-            // Fonts are loaded once (rebuilds the egui font atlas);
-            // visuals + text-styles are re-asserted each frame in
-            // App::ui based on the effective theme.
-            theme::install_fonts(&cc.egui_ctx);
+            // Initial font install uses default config; the first
+            // Snapshot from run_async will trigger a re-install if
+            // the user has font.* set.
+            theme::install_fonts(&cc.egui_ctx, &config::Config::default());
             theme::apply(&cc.egui_ctx, ThemeMode::Dark);
             Ok(Box::new(App::new(
                 cc.egui_ctx.clone(),
@@ -585,10 +586,16 @@ impl eframe::App for App {
                         chime = config.chime,
                         speak = config.speak,
                         popup_position = config.popup_position.as_str(),
+                        theme = config.theme.as_str(),
                         "main window snapshot updated"
                     );
+                    let fonts_changed = self.config.font != config.font;
                     self.reminders = reminders;
                     self.config = config;
+                    if fonts_changed {
+                        info!("font config changed; rebuilding font atlas");
+                        theme::install_fonts(&ctx, &self.config);
+                    }
                 }
                 UiMessage::LastFired { schedule, at } => {
                     self.last_fired.insert(schedule, at);

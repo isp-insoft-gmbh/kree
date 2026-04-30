@@ -2467,6 +2467,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tray-icon",
+ "ttf-parser",
  "tts",
  "unicode-properties",
  "unicode-segmentation",

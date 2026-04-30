@@ -33,6 +33,11 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 toml_edit = "0.25"
 
+# Font name-table parsing — used to resolve `family name` strings from
+# config.toml against installed `.ttf` / `.otf` / `.ttc` files. Already
+# in `Cargo.lock` as a transitive (egui → ab_glyph).
+ttf-parser = "0.25"
+
 # Async runtime — used only for scheduler timers + mpsc to UI
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "signal"] }
 

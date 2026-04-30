@@ -73,44 +73,94 @@ mod light {
 const JETBRAINS_MONO_NF: &[u8] =
     include_bytes!("../assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf");
 
-pub fn install_fonts(ctx: &egui::Context) {
+/// Default chain of fonts loaded by absolute path from the Windows
+/// fonts directory, used as the *secondary* fallback when the user
+/// hasn't configured something explicit. Always present on Win10/11.
+const DEFAULT_PATH_CANDIDATES: &[(&str, &str)] = &[
+    ("segoe-ui-variable", r"C:\Windows\Fonts\SegUIVar.ttf"),
+    ("segoe-ui", r"C:\Windows\Fonts\segoeui.ttf"),
+    ("cascadia-mono", r"C:\Windows\Fonts\CascadiaMono.ttf"),
+    ("cascadia-code", r"C:\Windows\Fonts\CascadiaCode.ttf"),
+    ("segoe-emoji", r"C:\Windows\Fonts\seguiemj.ttf"),
+    ("segoe-symbol", r"C:\Windows\Fonts\seguisym.ttf"),
+    ("segoe-icons", r"C:\Windows\Fonts\SegoeIcons.ttf"),
+];
+
+/// Register fonts with egui:
+///
+/// 1. The bundled JetBrains Mono Nerd Font (always present).
+/// 2. User-configured families from `config.font.proportional` /
+///    `monospace` / `fallbacks`, resolved against the system font
+///    index. Missing names are skipped with a warning — the rest of
+///    the chain absorbs the gap.
+/// 3. The hard-coded Segoe UI / Cascadia / Segoe Emoji chain by
+///    absolute path as the final fallback.
+///
+/// Call once on startup and again on every `config.font.*` change.
+/// `set_fonts` rebuilds the egui font atlas — non-trivial, but reloads
+/// are user-driven, not per frame.
+pub fn install_fonts(ctx: &egui::Context, config: &crate::config::Config) {
     let mut fonts = FontDefinitions::default();
 
+    // Bundled — always present.
     fonts.font_data.insert(
         "jetbrains-mono-nf".into(),
         Arc::new(FontData::from_static(JETBRAINS_MONO_NF)),
     );
 
-    let candidates: &[(&str, &str)] = &[
-        ("segoe-ui-variable", r"C:\Windows\Fonts\SegUIVar.ttf"),
-        ("segoe-ui", r"C:\Windows\Fonts\segoeui.ttf"),
-        ("cascadia-mono", r"C:\Windows\Fonts\CascadiaMono.ttf"),
-        ("cascadia-code", r"C:\Windows\Fonts\CascadiaCode.ttf"),
-        ("segoe-emoji", r"C:\Windows\Fonts\seguiemj.ttf"),
-        ("segoe-symbol", r"C:\Windows\Fonts\seguisym.ttf"),
-        ("segoe-icons", r"C:\Windows\Fonts\SegoeIcons.ttf"),
-    ];
+    // 1. User-configured families.
+    let mut user_proportional: Option<String> = None;
+    let mut user_monospace: Option<String> = None;
+    let mut user_fallbacks: Vec<String> = Vec::new();
 
-    let mut loaded = vec!["jetbrains-mono-nf"];
-    for (name, path) in candidates {
+    if let Some(name) =
+        register_user_family(&mut fonts, &config.font.proportional, "user-proportional")
+    {
+        user_proportional = Some(name);
+    }
+    if let Some(name) = register_user_family(&mut fonts, &config.font.monospace, "user-monospace") {
+        user_monospace = Some(name);
+    }
+    for (i, family) in config.font.fallbacks.iter().enumerate() {
+        let id = format!("user-fallback-{i}");
+        if let Some(name) = register_user_family(&mut fonts, family, &id) {
+            user_fallbacks.push(name);
+        }
+    }
+
+    // 2. Hard-coded path candidates as the secondary fallback.
+    let mut loaded_paths = vec!["jetbrains-mono-nf"];
+    for (name, path) in DEFAULT_PATH_CANDIDATES {
         match std::fs::read(path) {
             Ok(bytes) => {
                 fonts
                     .font_data
                     .insert((*name).into(), Arc::new(FontData::from_owned(bytes)));
-                loaded.push(*name);
+                loaded_paths.push(*name);
             }
             Err(e) => warn!(font = name, path, error = %e, "system font missing; skipping"),
         }
     }
-    info!(?loaded, "fonts loaded");
+
+    info!(
+        user_proportional = ?user_proportional,
+        user_monospace = ?user_monospace,
+        user_fallbacks = ?user_fallbacks,
+        loaded_paths = ?loaded_paths,
+        "fonts loaded"
+    );
 
     if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
+        if let Some(name) = &user_proportional {
+            family.insert(0, name.clone());
+        }
         for primary in ["segoe-ui-variable", "segoe-ui"] {
             if fonts.font_data.contains_key(primary) {
-                family.insert(0, primary.into());
-                break;
+                family.push(primary.into());
             }
+        }
+        for fallback in &user_fallbacks {
+            family.push(fallback.clone());
         }
         for fallback in [
             "jetbrains-mono-nf",
@@ -124,11 +174,17 @@ pub fn install_fonts(ctx: &egui::Context) {
         }
     }
     if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
-        family.insert(0, "jetbrains-mono-nf".into());
+        if let Some(name) = &user_monospace {
+            family.insert(0, name.clone());
+        }
+        family.push("jetbrains-mono-nf".into());
         for fallback in ["cascadia-mono", "cascadia-code"] {
             if fonts.font_data.contains_key(fallback) {
                 family.push(fallback.into());
             }
+        }
+        for fallback in &user_fallbacks {
+            family.push(fallback.clone());
         }
         for fallback in ["segoe-icons", "segoe-symbol", "segoe-emoji"] {
             if fonts.font_data.contains_key(fallback) {
@@ -138,6 +194,39 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
 
     ctx.set_fonts(fonts);
+}
+
+/// Resolve a configured family name against the system font index, load
+/// its bytes, and register them under `font_id` in `fonts`. Returns
+/// `Some(font_id)` on success, `None` if the family was empty or
+/// unresolvable. The caller appends `font_id` into the appropriate
+/// family chain.
+fn register_user_family(
+    fonts: &mut FontDefinitions,
+    family: &str,
+    font_id: &str,
+) -> Option<String> {
+    if family.is_empty() {
+        return None;
+    }
+    let path = match crate::fonts::resolve_family(family) {
+        Some(p) => p,
+        None => {
+            warn!(family, "configured font family not found in system index");
+            return None;
+        }
+    };
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(family, path = %path.display(), error = %e, "could not read configured font");
+            return None;
+        }
+    };
+    fonts
+        .font_data
+        .insert(font_id.into(), Arc::new(FontData::from_owned(bytes)));
+    Some(font_id.to_string())
 }
 
 fn apply_text_styles(ctx: &egui::Context) {
