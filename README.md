@@ -74,4 +74,8 @@ MIT — see [`LICENSE`](LICENSE).
 
 ---
 
+🛸 Lovingly hand-vibed through the chappa'ai with the
+[Claude Code](https://claude.com/claude-code) coding harness.
+*Tek'ma'tek, Jaffa.*
+
 *Jaffa, kree!*

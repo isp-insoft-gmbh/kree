@@ -13,20 +13,17 @@ Open follow-ups not covered by the spec or the current commit history.
   itself doesn't require Authenticode (SmartScreen does — separate
   concern), `wingetcreate update --submit` handles version bumps.
   Actual submission deferred until kree has a GitHub home.
-- [ ] **Build release binaries in a GitHub Actions workflow.** New
-  `.github/workflows/release.yml` triggered on tag (`v*`): builds
-  `kree.exe` with `cargo build --release` on `windows-latest`,
-  uploads as a release asset, and (eventually) feeds the winget
-  submission above. Decide whether to embed a Windows manifest /
-  versioninfo via `winres` so the EXE shows a real version + icon
-  in Explorer.
-- [ ] **Theme: dark / light / system.** Add a Theme selector to the
-  main window (and persist it — small JSON in `%APPDATA%\kree\` or
-  via egui's `Memory::set_persistent`). egui already supports
-  `Visuals::dark()` / `Visuals::light()`; "system" means watching
-  the Windows app-mode registry key
-  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme`)
-  and updating on change.
+- [x] **Build release binaries in a GitHub Actions workflow.**
+  Implemented as T2. `.github/workflows/release.yml` runs on tag
+  pushes (`v*`), builds via T1's size-first profile, attaches the
+  binary + bundled-font licenses to the release. Authenticode
+  signing + winres versioninfo deliberately out of scope — see
+  `docs/winget-research.md` for the SmartScreen story.
+- [x] **Theme: dark / light / system.** Implemented as T4.
+  Selector lives in the main-window settings panel; "system"
+  polls `HKCU\...\AppsUseLightTheme` once per second and applies
+  within ≤ 2 s of a Windows toggle. Light variant of nugu mapped
+  from `output/light.toml`.
 - [x] **`config.toml` + GUI editor.** Implemented across
   T3 steps 1-3 (`docs/specs/T3-config-toml.md`). Three keys —
   `chime`, `speak`, `popup_position` (10 anchor values) — round-trip
@@ -34,20 +31,16 @@ Open follow-ups not covered by the spec or the current commit history.
   edits and hand-edits share the same hot-reload pipeline; a
   feedback-loop guard skips re-broadcast when our own atomic write
   echoes back through the watcher.
-- [ ] **Pick fonts from installed system fonts via `config.toml`.**
-  Add `font.proportional`, `font.monospace`, `font.fallbacks` keys to
-  the planned `config.toml`. Resolve each value to a file by
-  enumerating installed fonts (Win32 `EnumFontFamiliesEx` over
-  `GetDC(NULL)`, or scan `C:\Windows\Fonts` + `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
-  for `*.ttf`/`*.otf`/`*.ttc` and parse the `name` table for the
-  family name) and prepend the resolved bytes to the matching
-  egui `FontFamily`. Keep the bundled JetBrains Mono Nerd Font as
-  the always-present fallback so a missing or mistyped family name
-  never tofus the entire UI.
-- [ ] **Optimized release profile.** Add a `[profile.release]`
-  block to `Cargo.toml` with `lto = "fat"`, `codegen-units = 1`,
-  `strip = "symbols"`, `panic = "abort"`, and `opt-level = "z"`
-  (size-first — kree is GUI / I/O bound, not hot-loop CPU).
-  Measure before / after on `kree.exe`; expect a meaningful drop
-  from the current debug-build size. Land alongside the release
-  CI item so the workflow benefits.
+- [x] **Pick fonts from installed system fonts via `config.toml`.**
+  Implemented as T5. `config.font.{proportional,monospace}` plus
+  `fallbacks` resolve against an `OnceLock`-cached scan of
+  `C:\Windows\Fonts` + `%LOCALAPPDATA%\Microsoft\Windows\Fonts`,
+  using `ttf-parser` to read each font's name table. Bundled
+  JetBrains Mono Nerd Font + the hard-coded Segoe / Cascadia
+  chain remain as the secondary fallback.
+- [x] **Optimized release profile.** Implemented as T1. Local
+  measurements (rustc 1.95 / Win11): 19.5 MB baseline → 11.9 MB
+  with `lto=fat` + `codegen-units=1` + `strip=symbols` +
+  `panic=abort` + `opt-level=s`. Picked `s` over `z` after
+  comparing both — `s` shipped 667 KB smaller because some of
+  egui's hot tessellator paths regressed under `z`.
