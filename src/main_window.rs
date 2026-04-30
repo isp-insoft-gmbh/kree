@@ -108,56 +108,69 @@ pub fn render(
                     .size(13.0)
                     .color(subtitle_color(mode)),
             );
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 16.0;
+            ui.add_space(6.0);
 
-                let mut chime = config.chime;
-                if ui.checkbox(&mut chime, "Chime").changed() {
-                    actions.push(MainWindowAction::SetConfig(ConfigPatch::Chime(chime)));
-                }
+            // Two-column grid keeps the field labels and controls on
+            // their own baselines. The previous `horizontal_wrapped`
+            // mixed checkbox heights with combo-box heights and ended
+            // up looking ragged.
+            egui::Grid::new("settings-grid")
+                .num_columns(2)
+                .spacing([16.0, 8.0])
+                .min_col_width(80.0)
+                .show(ui, |ui| {
+                    let mut chime = config.chime;
+                    ui.label("Chime");
+                    if ui.checkbox(&mut chime, "play on fire").changed() {
+                        actions.push(MainWindowAction::SetConfig(ConfigPatch::Chime(chime)));
+                    }
+                    ui.end_row();
 
-                let mut speak = config.speak;
-                if ui.checkbox(&mut speak, "Speak").changed() {
-                    actions.push(MainWindowAction::SetConfig(ConfigPatch::Speak(speak)));
-                }
+                    let mut speak = config.speak;
+                    ui.label("Speak");
+                    if ui.checkbox(&mut speak, "TTS body 2s after fire").changed() {
+                        actions.push(MainWindowAction::SetConfig(ConfigPatch::Speak(speak)));
+                    }
+                    ui.end_row();
 
-                ui.label("Popup:");
-                let mut chosen_pos: Option<PopupPosition> = None;
-                egui::ComboBox::from_id_salt("popup_position")
-                    .selected_text(config.popup_position.as_str())
-                    .show_ui(ui, |ui| {
-                        for &pos in PopupPosition::ALL {
-                            if ui
-                                .selectable_label(pos == config.popup_position, pos.as_str())
-                                .clicked()
-                            {
-                                chosen_pos = Some(pos);
+                    ui.label("Popup");
+                    let mut chosen_pos: Option<PopupPosition> = None;
+                    egui::ComboBox::from_id_salt("popup_position")
+                        .selected_text(config.popup_position.as_str())
+                        .show_ui(ui, |ui| {
+                            for &pos in PopupPosition::ALL {
+                                if ui
+                                    .selectable_label(pos == config.popup_position, pos.as_str())
+                                    .clicked()
+                                {
+                                    chosen_pos = Some(pos);
+                                }
                             }
-                        }
-                    });
-                if let Some(p) = chosen_pos {
-                    actions.push(MainWindowAction::SetConfig(ConfigPatch::PopupPosition(p)));
-                }
+                        });
+                    if let Some(p) = chosen_pos {
+                        actions.push(MainWindowAction::SetConfig(ConfigPatch::PopupPosition(p)));
+                    }
+                    ui.end_row();
 
-                ui.label("Theme:");
-                let mut chosen_theme: Option<ThemeChoice> = None;
-                egui::ComboBox::from_id_salt("theme")
-                    .selected_text(config.theme.as_str())
-                    .show_ui(ui, |ui| {
-                        for &theme in ThemeChoice::ALL {
-                            if ui
-                                .selectable_label(theme == config.theme, theme.as_str())
-                                .clicked()
-                            {
-                                chosen_theme = Some(theme);
+                    ui.label("Theme");
+                    let mut chosen_theme: Option<ThemeChoice> = None;
+                    egui::ComboBox::from_id_salt("theme")
+                        .selected_text(config.theme.as_str())
+                        .show_ui(ui, |ui| {
+                            for &theme in ThemeChoice::ALL {
+                                if ui
+                                    .selectable_label(theme == config.theme, theme.as_str())
+                                    .clicked()
+                                {
+                                    chosen_theme = Some(theme);
+                                }
                             }
-                        }
-                    });
-                if let Some(t) = chosen_theme {
-                    actions.push(MainWindowAction::SetConfig(ConfigPatch::Theme(t)));
-                }
-            });
+                        });
+                    if let Some(t) = chosen_theme {
+                        actions.push(MainWindowAction::SetConfig(ConfigPatch::Theme(t)));
+                    }
+                    ui.end_row();
+                });
 
             ui.add_space(14.0);
             ui.separator();
