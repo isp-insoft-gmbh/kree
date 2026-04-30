@@ -1,3 +1,9 @@
+// Release builds run as a Windows GUI subsystem binary — no console
+// attaches, so the autostart entry doesn't bring up a `cmd` window
+// (and closing that cmd no longer kills kree). Debug builds keep the
+// default console subsystem so `cargo run` shows stderr.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod audio;
 mod autostart;
 mod config;
@@ -74,7 +80,8 @@ fn main() -> Result<()> {
         }
     };
 
-    info!("kree starting (user={user})");
+    let silent = std::env::args().any(|a| a == "--silent");
+    info!(silent, "kree starting (user={user})");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
