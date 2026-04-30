@@ -17,7 +17,7 @@ A lightweight Windows tray app for cron-scheduled reminders.
 Prerequisites: a recent stable Rust toolchain (rustup → `stable`) and Windows 10 / 11.
 
 ```
-git clone https://github.com/<your-fork>/kree.git
+git clone https://github.com/isp-insoft-gmbh/kree.git
 cd kree
 cargo build --release
 ```
