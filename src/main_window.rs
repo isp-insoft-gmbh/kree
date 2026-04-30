@@ -30,7 +30,13 @@ pub fn render(
 ) -> Vec<MainWindowAction> {
     let mut actions = Vec::new();
 
+    // Explicit `fill` here so the main window's background tracks
+    // whichever palette is active. Without it, the outer Frame is
+    // transparent over eframe's own clear, which can lag the theme
+    // by a frame on toggle.
+    let panel_fill = ui.visuals().panel_fill;
     egui::Frame::default()
+        .fill(panel_fill)
         .inner_margin(egui::Margin::symmetric(20, 16))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);

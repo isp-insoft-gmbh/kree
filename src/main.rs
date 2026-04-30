@@ -547,6 +547,19 @@ fn apply_patch_local(config: &mut config::Config, patch: config::ConfigPatch) {
 }
 
 impl eframe::App for App {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // eframe's default clear_color reads `visuals` *as-passed* — in
+        // practice that's egui's stock dark/light defaults from before
+        // our `theme::apply` ran. Pin the swap-chain clear directly to
+        // our nugu palettes so a hidden-then-shown light viewport
+        // doesn't briefly flash dark.
+        let bg = match self.effective_theme() {
+            ThemeMode::Dark => egui::Color32::from_rgb(0x24, 0x24, 0x24),
+            ThemeMode::Light => egui::Color32::from_rgb(0xdb, 0xdb, 0xdb),
+        };
+        egui::Rgba::from(bg).to_array()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let mode = self.effective_theme();
