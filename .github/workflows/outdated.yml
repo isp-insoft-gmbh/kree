@@ -15,7 +15,7 @@ jobs:
     name: Check for outdated crates
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-outdated
@@ -38,7 +38,7 @@ jobs:
           exit 0
       - name: Open or update issue
         if: steps.outdated.outputs.status != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const report = `${{ steps.outdated.outputs.report }}`;
