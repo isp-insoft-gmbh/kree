@@ -8,7 +8,7 @@ A lightweight Windows tray app for cron-scheduled reminders.
 - When a reminder fires: bundled chime → popup above the tray icon → speech if you don't dismiss within 2 seconds.
 - Edit reminders in your `$VISUAL` / `$EDITOR` (falls back to Notepad).
 
-📖 **[Read the user guide → `MANUAL.md`](MANUAL.md)**
+📖 **[Read the user guide → `docs/manual.md`](docs/manual.md)**
 
 ## Install
 
@@ -64,8 +64,10 @@ Type emoji with the Windows picker (`Win + .`). Save the file — kree hot-reloa
 
 ## Documentation
 
-- [`MANUAL.md`](MANUAL.md) — user guide (install, edit, troubleshoot, cron syntax).
-- [`SPEC.md`](SPEC.md) — full build specification.
+- [`docs/manual.md`](docs/manual.md) — user guide (install, edit, troubleshoot, cron syntax).
+- [`docs/specs/`](docs/specs/) — product spec + per-task implementation specs.
+  - [`spec.md`](docs/specs/spec.md) — canonical product spec.
+  - [`open-items.md`](docs/specs/open-items.md) — deferred follow-ups.
 - [`CLAUDE.md`](CLAUDE.md) — agent working instructions.
 
 ## License

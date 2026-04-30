@@ -1,13 +1,16 @@
-# TODO
+# Open items
 
-Open follow-ups not covered by the spec or the current commit history.
+Follow-ups not covered by `spec.md` or its build order. Items marked
+`[x]` are done — kept here as a brief log pointing at where the work
+landed. Items marked `[ ]` are still open; each carries enough context
+for a future session to pick up.
 
 - [ ] **Push to the `isp-insoft` GitHub org.** Add a `git remote` for the
   ISP Insoft repo, push `main`, switch CI from "windows-latest scratch"
   to the org's standard runner pool if applicable, and replace the
   `../../issues` placeholder in `README.md` with a real link.
 - [x] **Explore publishing as a winget package.** Research notes
-  in [`docs/winget-research.md`](docs/winget-research.md). Summary:
+  in [`../winget-research.md`](../winget-research.md). Summary:
   manifest = 5 YAMLs under `manifests/k/<pub>/<pkg>/<ver>/`,
   `InstallerType: portable` is accepted (no MSI wrapper), winget
   itself doesn't require Authenticode (SmartScreen does — separate

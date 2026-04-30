@@ -28,7 +28,7 @@ impl Scheduler {
     /// `find_next_occurrence(now) → sleep → send event`. The reference time
     /// is recomputed from `Local::now()` on every iteration so wake-from-sleep
     /// fires once for the next future occurrence rather than catching up on
-    /// missed ones (SPEC.md § 5.1).
+    /// missed ones (docs/specs/spec.md § 5.1).
     pub fn spawn(reminders: Vec<Reminder>, tx: mpsc::Sender<ReminderEvent>) -> Self {
         let mut handles = Vec::with_capacity(reminders.len());
         for reminder in reminders {

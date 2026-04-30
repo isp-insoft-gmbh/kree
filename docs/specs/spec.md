@@ -1,6 +1,6 @@
 # kree — Build Spec
 
-> **For Claude Code:** Read this entire document before writing any code. Then read `CLAUDE.md` for working instructions. Before starting step 1 of the build order, list the exact crate versions you intend to use and wait for the user's approval. Work in small commits — one build-order step per commit. Run `cargo check` and `cargo clippy` after every change. If a step is blocked by a question, **stop and ask** rather than guessing.
+> **For Claude Code:** Read this entire document before writing any code. Then read `../../CLAUDE.md` for working instructions. Before starting step 1 of the build order, list the exact crate versions you intend to use and wait for the user's approval. Work in small commits — one build-order step per commit. Run `cargo check` and `cargo clippy` after every change. If a step is blocked by a question, **stop and ask** rather than guessing.
 
 ---
 
@@ -60,32 +60,48 @@ Project repo layout:
 ├── Cargo.lock
 ├── deny.toml
 ├── rustfmt.toml
+├── lefthook.yml                  ← pre-commit / commit-msg / pre-push hooks
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml
-│   │   └── outdated.yml
+│   │   ├── outdated.yml
+│   │   └── release.yml           ← tag-triggered release builds (T2)
 │   └── dependabot.yml
 ├── assets/
 │   ├── chime.ogg                 ← CC0 sound, embedded via include_bytes!
-│   ├── tray-icon.png             ← 32x32 or 64x64
+│   ├── tray-icon.png
 │   ├── tray-icon-paused.png
-│   └── README.md                 ← document asset sources + licenses
+│   ├── app-icon.png / .ico
+│   ├── fonts/
+│   │   ├── JetBrainsMonoNerdFontMono-Regular.ttf
+│   │   ├── LICENSE-JetBrainsMono-OFL.txt
+│   │   └── LICENSE-NerdFonts-MIT.txt
+│   └── README.md                 ← asset sources + licenses
 ├── src/
 │   ├── main.rs
-│   ├── parser.rs                 ← reminders.txt parser
-│   ├── scheduler.rs              ← spawn-per-reminder loop
-│   ├── popup.rs                  ← popup window + stacking
-│   ├── main_window.rs            ← table view
-│   ├── tray.rs                   ← tray menu + state
-│   ├── audio.rs                  ← sound + TTS
-│   ├── editor.rs                 ← thin wrapper around `edit` crate
-│   ├── paths.rs                  ← directories wrapper
-│   └── icon.rs                   ← emoji extraction from message
-├── tests/
-│   └── parser_tests.rs           ← parser unit tests live with parser; integration tests here if needed
-├── SPEC.md                       ← this file
+│   ├── parser.rs
+│   ├── scheduler.rs
+│   ├── popup.rs
+│   ├── main_window.rs
+│   ├── tray.rs
+│   ├── audio.rs
+│   ├── editor.rs
+│   ├── paths.rs
+│   ├── config.rs                 ← config.toml round-trip (T3)
+│   ├── theme.rs                  ← nugu palettes + font install (T4)
+│   ├── fonts.rs                  ← system-font name-table index (T5)
+│   ├── autostart.rs
+│   ├── logging.rs
+│   └── watcher.rs
+├── docs/
+│   ├── manual.md                 ← user-facing guide
+│   ├── winget-research.md
+│   └── specs/
+│       ├── spec.md               ← this file (canonical product spec)
+│       ├── open-items.md         ← deferred follow-ups
+│       └── T1..T6-*.md           ← per-task implementation specs
 ├── CLAUDE.md                     ← instructions for Claude Code
-└── README.md                     ← user-facing
+└── README.md                     ← user-facing entry point
 ```
 
 ## 4. Reminder file format

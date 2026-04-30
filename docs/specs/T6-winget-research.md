@@ -23,10 +23,10 @@ is `docs/winget-research.md`, a write-up of:
    accepted (`Portable` `InstallerType`). No WiX / NSIS needed for
    the v1 submission.
 
-The doc lives at `docs/winget-research.md`. TODO.md keeps the
+The doc lives at `docs/winget-research.md`. `docs/specs/open-items.md` keeps the
 "explore winget" item open since this is research only — actually
 publishing the package is a follow-up that shouldn't be done until
-the project has a real GitHub home (T1 in TODO.md, intentionally
+the project has a real GitHub home (T1 in `docs/specs/open-items.md`, intentionally
 deferred).
 
 ## Acceptance
@@ -34,6 +34,6 @@ deferred).
 1. `docs/winget-research.md` exists and answers each of the five
    bullets above with concrete references (URLs, file paths,
    action names).
-2. TODO.md item for winget is updated to point at the doc and
+2. `docs/specs/open-items.md` item for winget is updated to point at the doc and
    explicitly marks "actual submission" as deferred until the repo
    has a stable origin.

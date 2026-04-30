@@ -122,5 +122,5 @@ but neither is needed today.
 ## Status
 
 Research only. Actual submission deferred until kree has a stable
-GitHub origin (TODO.md item: "Push to the `isp-insoft` GitHub org").
-TODO.md updated to point at this doc.
+GitHub origin (`docs/specs/open-items.md` item: "Push to the `isp-insoft` GitHub org").
+`docs/specs/open-items.md` updated to point at this doc.
