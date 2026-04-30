@@ -14,7 +14,6 @@ use toml_edit::{DocumentMut, Item, Value};
 
 /// Documented template seeded into a fresh `config.toml` on first GUI
 /// write when no file exists yet.
-#[allow(dead_code)] // seeded by `apply_patch` (T3 step 3)
 pub const TEMPLATE: &str = "\
 # kree configuration. Hot-reloaded — no restart required.
 # Hand-edits and GUI changes round-trip without losing comments or
@@ -33,6 +32,11 @@ speak = true
 #   left_center, center, right_center,
 #   bottom_left, bottom_center, bottom_right
 popup_position = \"tray\"
+
+# Color theme. \"system\" follows the Windows app-mode setting at
+# HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\\AppsUseLightTheme
+# and updates within ~1 s when toggled. Other values: \"dark\", \"light\".
+theme = \"system\"
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -67,7 +71,6 @@ impl PopupPosition {
         }
     }
 
-    #[allow(dead_code)] // surfaced in the settings combo box (T3 step 3)
     pub const ALL: &'static [PopupPosition] = &[
         Self::Tray,
         Self::TopLeft,
@@ -82,12 +85,36 @@ impl PopupPosition {
     ];
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeChoice {
+    /// Follow the Windows app-mode setting (`AppsUseLightTheme` registry
+    /// key) and update on change.
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+impl ThemeChoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+
+    pub const ALL: &'static [ThemeChoice] = &[Self::System, Self::Dark, Self::Light];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub chime: bool,
     pub speak: bool,
     pub popup_position: PopupPosition,
+    pub theme: ThemeChoice,
 }
 
 impl Default for Config {
@@ -96,19 +123,19 @@ impl Default for Config {
             chime: true,
             speak: true,
             popup_position: PopupPosition::Tray,
+            theme: ThemeChoice::System,
         }
     }
 }
 
 /// In-process patches that the GUI sends to mutate `config.toml`. Each
-/// variant maps to one TOML key. Wired by the settings UI in step 3
-/// of T3 — present here so the round-trip helper has a stable type.
-#[allow(dead_code)] // wired by main_window settings panel (T3 step 3)
+/// variant maps to one TOML key.
 #[derive(Debug, Clone, Copy)]
 pub enum ConfigPatch {
     Chime(bool),
     Speak(bool),
     PopupPosition(PopupPosition),
+    Theme(ThemeChoice),
 }
 
 #[derive(Debug, Error)]
@@ -151,13 +178,13 @@ pub fn load(path: &Path) -> Result<Config, LoadError> {
 /// key order, whitespace, and unknown keys. Pure function — no
 /// filesystem. The disk-side wrapper ([`apply_patch`]) handles
 /// atomic write.
-#[allow(dead_code)] // wired by main_window settings panel (T3 step 3)
 pub fn apply_patch_to_string(input: &str, patch: ConfigPatch) -> Result<String> {
     let mut doc: DocumentMut = input.parse().context("parsing TOML for patch")?;
     match patch {
         ConfigPatch::Chime(v) => set_bool(&mut doc, "chime", v),
         ConfigPatch::Speak(v) => set_bool(&mut doc, "speak", v),
         ConfigPatch::PopupPosition(p) => set_str(&mut doc, "popup_position", p.as_str()),
+        ConfigPatch::Theme(t) => set_str(&mut doc, "theme", t.as_str()),
     }
     Ok(doc.to_string())
 }
@@ -193,7 +220,6 @@ fn set_str(doc: &mut DocumentMut, key: &str, v: &str) {
 /// Persist a single patch to `path`. Creates the file with [`TEMPLATE`]
 /// if missing. Writes atomically (temp file + rename) so a crash
 /// mid-write doesn't leave a half-flushed file.
-#[allow(dead_code)] // wired by main_window settings panel (T3 step 3)
 pub fn apply_patch(path: &Path, patch: ConfigPatch) -> Result<()> {
     let initial = match std::fs::read_to_string(path) {
         Ok(s) => s,

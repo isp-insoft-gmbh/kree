@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use chrono::{DateTime, Local};
 use eframe::egui;
 
-use crate::config::{Config, ConfigPatch, PopupPosition};
+use crate::config::{Config, ConfigPatch, PopupPosition, ThemeChoice};
 use crate::parser::Reminder;
+use crate::theme::{ThemeMode, heading_color, muted_color, subtitle_color};
 
 pub const WIDTH: f32 = 980.0;
 pub const HEIGHT: f32 = 620.0;
@@ -25,6 +26,7 @@ pub fn render(
     reminders: &[Reminder],
     config: &Config,
     last_fired: &HashMap<String, DateTime<Local>>,
+    mode: ThemeMode,
 ) -> Vec<MainWindowAction> {
     let mut actions = Vec::new();
 
@@ -34,34 +36,34 @@ pub fn render(
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
             ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
 
-            // Explicit heading colour — egui's default heading color
-            // resolves to `widgets.noninteractive.fg_stroke.color`, which
-            // is `ui.normal` (#dbdbdb) and reads as muted on the dark
-            // chrome. Use `ui.important_global` (#f3effb) for headings.
+            // Explicit heading colour. egui's default heading color
+            // resolves through `Visuals::strong_text_color`, but we go
+            // through the theme module so the title pops in both
+            // light and dark modes.
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("kree")
                         .size(30.0)
                         .strong()
-                        .color(egui::Color32::from_rgb(0xf3, 0xef, 0xfb)),
+                        .color(heading_color(mode)),
                 );
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new("⟁")
                         .size(22.0)
-                        .color(egui::Color32::from_rgb(0xd8, 0x6d, 0xd8)),
+                        .color(subtitle_color(mode)),
                 );
             });
             ui.label(
                 egui::RichText::new("Jaffa, kree! Cron-scheduled reminders.")
                     .size(13.0)
                     .italics()
-                    .color(egui::Color32::from_rgb(0xc9, 0xb6, 0xeb)),
+                    .color(subtitle_color(mode)),
             );
             ui.label(
                 egui::RichText::new("\"Loosely translated: attention, listen up.\"  — D. Jackson")
                     .size(11.0)
-                    .color(egui::Color32::from_rgb(0x9d, 0x9d, 0x9d)),
+                    .color(muted_color(mode)),
             );
             ui.add_space(14.0);
 
@@ -98,7 +100,7 @@ pub fn render(
                 egui::RichText::new("Settings")
                     .strong()
                     .size(13.0)
-                    .color(egui::Color32::from_rgb(0xc9, 0xb6, 0xeb)),
+                    .color(subtitle_color(mode)),
             );
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
@@ -115,7 +117,7 @@ pub fn render(
                 }
 
                 ui.label("Popup:");
-                let mut chosen: Option<PopupPosition> = None;
+                let mut chosen_pos: Option<PopupPosition> = None;
                 egui::ComboBox::from_id_salt("popup_position")
                     .selected_text(config.popup_position.as_str())
                     .show_ui(ui, |ui| {
@@ -124,12 +126,30 @@ pub fn render(
                                 .selectable_label(pos == config.popup_position, pos.as_str())
                                 .clicked()
                             {
-                                chosen = Some(pos);
+                                chosen_pos = Some(pos);
                             }
                         }
                     });
-                if let Some(p) = chosen {
+                if let Some(p) = chosen_pos {
                     actions.push(MainWindowAction::SetConfig(ConfigPatch::PopupPosition(p)));
+                }
+
+                ui.label("Theme:");
+                let mut chosen_theme: Option<ThemeChoice> = None;
+                egui::ComboBox::from_id_salt("theme")
+                    .selected_text(config.theme.as_str())
+                    .show_ui(ui, |ui| {
+                        for &theme in ThemeChoice::ALL {
+                            if ui
+                                .selectable_label(theme == config.theme, theme.as_str())
+                                .clicked()
+                            {
+                                chosen_theme = Some(theme);
+                            }
+                        }
+                    });
+                if let Some(t) = chosen_theme {
+                    actions.push(MainWindowAction::SetConfig(ConfigPatch::Theme(t)));
                 }
             });
 

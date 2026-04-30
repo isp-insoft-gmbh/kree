@@ -11,6 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::UiFire;
 use crate::config::PopupPosition;
+use crate::theme::ThemeMode;
 
 pub const POPUP_WIDTH: f32 = 320.0;
 pub const POPUP_HEIGHT: f32 = 100.0;
@@ -36,10 +37,14 @@ struct PopupData {
     fired_at: DateTime<Local>,
     visible: Arc<AtomicBool>,
     opened_at: Instant,
+    /// Theme mode at the moment the popup opened. We freeze it for the
+    /// popup's lifetime — switching the global theme mid-popup would
+    /// otherwise re-tint the visible rectangle.
+    theme: ThemeMode,
 }
 
 impl PopupHandle {
-    pub fn new(fire: UiFire, position: (f32, f32)) -> Self {
+    pub fn new(fire: UiFire, position: (f32, f32), theme: ThemeMode) -> Self {
         let now = Instant::now();
         Self {
             inner: Arc::new(PopupData {
@@ -48,6 +53,7 @@ impl PopupHandle {
                 fired_at: fire.fired_at,
                 visible: fire.visible,
                 opened_at: now,
+                theme,
             }),
             opened_at: now,
             position,
@@ -84,8 +90,9 @@ impl PopupHandle {
         let popup = Arc::clone(&self.inner);
         ctx.show_viewport_deferred(viewport_id, builder, move |ctx, _class| {
             // Each viewport carries its own Context, so the theme applied
-            // to the root viewport doesn't propagate. Re-apply per frame.
-            crate::theme::apply(ctx);
+            // to the root viewport doesn't propagate. Re-apply per frame
+            // using the popup's frozen mode.
+            crate::theme::apply(ctx, popup.theme);
             render(ctx, &popup);
         });
 
@@ -276,7 +283,7 @@ mod tests {
             fired_at: Local::now(),
             visible,
         };
-        PopupHandle::new(fire, (100.0, top_y))
+        PopupHandle::new(fire, (100.0, top_y), ThemeMode::Dark)
     }
 
     #[test]
