@@ -380,9 +380,15 @@ fn light_visuals() -> Visuals {
     widgets.hovered.bg_stroke = Stroke::new(1.5, light::IMPORTANT_LOCAL);
     widgets.hovered.corner_radius = radius;
 
+    // `widgets.active.fg_stroke.color` is the resolution target of
+    // `Visuals::strong_text_color()` — it tints every
+    // `RichText::strong()` label, including the table column headers.
+    // Use `important_global` (dark purple in light mode) so strong
+    // text reads on the light backdrop. Mirrors the dark-mode fix in
+    // `dark_visuals` where the same field was pointing at backdrop.
     widgets.active.bg_fill = light::IMPORTANT_LOCAL;
     widgets.active.weak_bg_fill = light::ACCENT;
-    widgets.active.fg_stroke = Stroke::new(1.5, light::BACKDROP);
+    widgets.active.fg_stroke = Stroke::new(1.5, light::IMPORTANT_GLOBAL);
     widgets.active.bg_stroke = Stroke::new(1.5, light::IMPORTANT_GLOBAL);
     widgets.active.corner_radius = radius;
 
