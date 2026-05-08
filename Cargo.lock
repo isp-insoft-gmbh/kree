@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "kree"
-version = "0.0.1-rc1"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "auto-launch",
