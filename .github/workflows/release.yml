@@ -39,6 +39,16 @@ jobs:
           }
           Get-Item target/release/kree.exe | Format-List Name, Length, LastWriteTime
 
+      - name: Verify release notes exist
+        shell: pwsh
+        run: |
+          if (-not (Test-Path RELEASE_NOTES.md)) {
+            throw "RELEASE_NOTES.md missing — create it for every release."
+          }
+          if ([string]::IsNullOrWhiteSpace((Get-Content RELEASE_NOTES.md -Raw))) {
+            throw "RELEASE_NOTES.md is empty."
+          }
+
       - name: Determine prerelease flag
         id: prerelease
         shell: pwsh
@@ -54,9 +64,11 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
           files: |
             target/release/kree.exe
             assets/fonts/LICENSE-JetBrainsMono-OFL.txt
             assets/fonts/LICENSE-NerdFonts-MIT.txt
+            assets/fonts/LICENSE-NotoEmoji-OFL.txt
