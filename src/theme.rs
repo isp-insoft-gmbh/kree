@@ -2,9 +2,9 @@
 //! (`~/Workspaces/dotfiles/nugu/output/{dark,light}.toml`, generated
 //! by `just build` from `nugu.nu` + `palette.nu`).
 //!
-//! `apply` is idempotent — `App::ui` re-asserts visuals every frame,
-//! and every popup viewport re-applies it inside its closure (each
-//! viewport owns its own egui `Context`).
+//! `apply` is idempotent. Popup viewports call it from their own egui
+//! contexts; the main window applies it only when the effective theme
+//! changes.
 
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
     Visuals,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -61,7 +61,6 @@ mod light {
     pub const BACKDROP: Color32 = Color32::from_rgb(0xdb, 0xdb, 0xdb);
     pub const ACCENT: Color32 = Color32::from_rgb(0x92, 0x27, 0x92);
     pub const MINOR: Color32 = Color32::from_rgb(0x29, 0x29, 0x29);
-    pub const FOCUS: Color32 = Color32::from_rgb(0x15, 0x33, 0x3b);
     pub const UNFOCUS: Color32 = Color32::from_rgb(0x5d, 0x5d, 0x5d);
     pub const IMPORTANT_LOCAL: Color32 = Color32::from_rgb(0x60, 0x49, 0x80);
     pub const IMPORTANT_GLOBAL: Color32 = Color32::from_rgb(0x3e, 0x2f, 0x53);
@@ -72,161 +71,35 @@ mod light {
 
 const JETBRAINS_MONO_NF: &[u8] =
     include_bytes!("../assets/fonts/JetBrainsMonoNerdFontMono-Regular.ttf");
+const NOTO_EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf");
 
-/// Default chain of fonts loaded by absolute path from the Windows
-/// fonts directory, used as the *secondary* fallback when the user
-/// hasn't configured something explicit. Always present on Win10/11.
-const DEFAULT_PATH_CANDIDATES: &[(&str, &str)] = &[
-    ("segoe-ui-variable", r"C:\Windows\Fonts\SegUIVar.ttf"),
-    ("segoe-ui", r"C:\Windows\Fonts\segoeui.ttf"),
-    ("cascadia-mono", r"C:\Windows\Fonts\CascadiaMono.ttf"),
-    ("cascadia-code", r"C:\Windows\Fonts\CascadiaCode.ttf"),
-    ("segoe-emoji", r"C:\Windows\Fonts\seguiemj.ttf"),
-    ("segoe-symbol", r"C:\Windows\Fonts\seguisym.ttf"),
-    ("segoe-icons", r"C:\Windows\Fonts\SegoeIcons.ttf"),
-];
-
-/// Register fonts with egui:
-///
-/// 1. The bundled JetBrains Mono Nerd Font (always present).
-/// 2. User-configured families from `config.font.proportional` /
-///    `monospace` / `fallbacks`, resolved against the system font
-///    index. Missing names are skipped with a warning — the rest of
-///    the chain absorbs the gap.
-/// 3. The hard-coded Segoe UI / Cascadia / Segoe Emoji chain by
-///    absolute path as the final fallback.
-///
-/// Call once on startup and again on every `config.font.*` change.
-/// `set_fonts` rebuilds the egui font atlas — non-trivial, but reloads
-/// are user-driven, not per frame.
-pub fn install_fonts(ctx: &egui::Context, config: &crate::config::Config) {
+/// Register the bundled Nerd Font plus an emoji-symbol fallback.
+pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
-    // Bundled — always present.
     fonts.font_data.insert(
         "jetbrains-mono-nf".into(),
         Arc::new(FontData::from_static(JETBRAINS_MONO_NF)),
     );
-
-    // 1. User-configured families.
-    let mut user_proportional: Option<String> = None;
-    let mut user_monospace: Option<String> = None;
-    let mut user_fallbacks: Vec<String> = Vec::new();
-
-    if let Some(name) =
-        register_user_family(&mut fonts, &config.font.proportional, "user-proportional")
-    {
-        user_proportional = Some(name);
-    }
-    if let Some(name) = register_user_family(&mut fonts, &config.font.monospace, "user-monospace") {
-        user_monospace = Some(name);
-    }
-    for (i, family) in config.font.fallbacks.iter().enumerate() {
-        let id = format!("user-fallback-{i}");
-        if let Some(name) = register_user_family(&mut fonts, family, &id) {
-            user_fallbacks.push(name);
-        }
-    }
-
-    // 2. Hard-coded path candidates as the secondary fallback.
-    let mut loaded_paths = vec!["jetbrains-mono-nf"];
-    for (name, path) in DEFAULT_PATH_CANDIDATES {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                fonts
-                    .font_data
-                    .insert((*name).into(), Arc::new(FontData::from_owned(bytes)));
-                loaded_paths.push(*name);
-            }
-            Err(e) => warn!(font = name, path, error = %e, "system font missing; skipping"),
-        }
-    }
-
-    info!(
-        user_proportional = ?user_proportional,
-        user_monospace = ?user_monospace,
-        user_fallbacks = ?user_fallbacks,
-        loaded_paths = ?loaded_paths,
-        "fonts loaded"
+    fonts.font_data.insert(
+        "noto-emoji".into(),
+        Arc::new(FontData::from_static(NOTO_EMOJI)),
     );
 
+    info!(fonts = ?["jetbrains-mono-nf", "noto-emoji"], "fonts loaded");
+
     if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
-        if let Some(name) = &user_proportional {
-            family.insert(0, name.clone());
-        }
-        for primary in ["segoe-ui-variable", "segoe-ui"] {
-            if fonts.font_data.contains_key(primary) {
-                family.push(primary.into());
-            }
-        }
-        for fallback in &user_fallbacks {
-            family.push(fallback.clone());
-        }
-        for fallback in [
-            "jetbrains-mono-nf",
-            "segoe-icons",
-            "segoe-symbol",
-            "segoe-emoji",
-        ] {
-            if fonts.font_data.contains_key(fallback) {
-                family.push(fallback.into());
-            }
-        }
+        family.clear();
+        family.push("jetbrains-mono-nf".into());
+        family.push("noto-emoji".into());
     }
     if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
-        if let Some(name) = &user_monospace {
-            family.insert(0, name.clone());
-        }
+        family.clear();
         family.push("jetbrains-mono-nf".into());
-        for fallback in ["cascadia-mono", "cascadia-code"] {
-            if fonts.font_data.contains_key(fallback) {
-                family.push(fallback.into());
-            }
-        }
-        for fallback in &user_fallbacks {
-            family.push(fallback.clone());
-        }
-        for fallback in ["segoe-icons", "segoe-symbol", "segoe-emoji"] {
-            if fonts.font_data.contains_key(fallback) {
-                family.push(fallback.into());
-            }
-        }
+        family.push("noto-emoji".into());
     }
 
     ctx.set_fonts(fonts);
-}
-
-/// Resolve a configured family name against the system font index, load
-/// its bytes, and register them under `font_id` in `fonts`. Returns
-/// `Some(font_id)` on success, `None` if the family was empty or
-/// unresolvable. The caller appends `font_id` into the appropriate
-/// family chain.
-fn register_user_family(
-    fonts: &mut FontDefinitions,
-    family: &str,
-    font_id: &str,
-) -> Option<String> {
-    if family.is_empty() {
-        return None;
-    }
-    let path = match crate::fonts::resolve_family(family) {
-        Some(p) => p,
-        None => {
-            warn!(family, "configured font family not found in system index");
-            return None;
-        }
-    };
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => {
-            warn!(family, path = %path.display(), error = %e, "could not read configured font");
-            return None;
-        }
-    };
-    fonts
-        .font_data
-        .insert(font_id.into(), Arc::new(FontData::from_owned(bytes)));
-    Some(font_id.to_string())
 }
 
 fn apply_text_styles(ctx: &egui::Context) {
@@ -315,30 +188,28 @@ fn dark_visuals() -> Visuals {
     widgets.noninteractive.bg_stroke = Stroke::new(1.0, dark::UNFOCUS);
     widgets.noninteractive.corner_radius = radius;
 
-    widgets.inactive.bg_fill = dark::UNFOCUS;
+    widgets.inactive.bg_fill = dark::SUBTLE;
     widgets.inactive.weak_bg_fill = dark::FAINT;
     widgets.inactive.fg_stroke = Stroke::new(1.0, dark::NORMAL);
     widgets.inactive.bg_stroke = Stroke::new(1.0, dark::MINOR);
     widgets.inactive.corner_radius = radius;
 
-    widgets.hovered.bg_fill = dark::ACCENT;
-    widgets.hovered.weak_bg_fill = dark::FOCUS;
-    widgets.hovered.fg_stroke = Stroke::new(1.5, dark::IMPORTANT_GLOBAL);
-    widgets.hovered.bg_stroke = Stroke::new(1.5, dark::IMPORTANT_LOCAL);
+    widgets.hovered.bg_fill = dark::SUBTLE;
+    widgets.hovered.weak_bg_fill = dark::FAINT;
+    widgets.hovered.fg_stroke = Stroke::new(1.0, dark::IMPORTANT_GLOBAL);
+    widgets.hovered.bg_stroke = Stroke::new(1.0, dark::ACCENT);
     widgets.hovered.corner_radius = radius;
 
-    widgets.active.bg_fill = dark::IMPORTANT_LOCAL;
-    widgets.active.weak_bg_fill = dark::ACCENT;
-    widgets.active.fg_stroke = Stroke::new(1.5, dark::IMPORTANT_GLOBAL);
-    widgets.active.bg_stroke = Stroke::new(1.5, dark::IMPORTANT_GLOBAL);
+    widgets.active.bg_fill = dark::SUBTLE;
+    widgets.active.weak_bg_fill = dark::FAINT;
+    widgets.active.fg_stroke = Stroke::new(1.0, dark::IMPORTANT_GLOBAL);
+    widgets.active.bg_stroke = Stroke::new(1.0, dark::ACCENT);
     widgets.active.corner_radius = radius;
 
-    widgets.open.bg_fill = dark::FOCUS;
+    widgets.open.bg_fill = dark::SUBTLE;
     widgets.open.fg_stroke = Stroke::new(1.0, dark::IMPORTANT_GLOBAL);
     widgets.open.bg_stroke = Stroke::new(1.0, dark::ACCENT);
     widgets.open.corner_radius = radius;
-
-    let _ = dark::SUBTLE; // silence unused-const warning until we use it
     v
 }
 
@@ -374,26 +245,20 @@ fn light_visuals() -> Visuals {
     widgets.inactive.bg_stroke = Stroke::new(1.0, light::MINOR);
     widgets.inactive.corner_radius = radius;
 
-    widgets.hovered.bg_fill = light::ACCENT;
-    widgets.hovered.weak_bg_fill = light::FOCUS;
-    widgets.hovered.fg_stroke = Stroke::new(1.5, light::BACKDROP);
-    widgets.hovered.bg_stroke = Stroke::new(1.5, light::IMPORTANT_LOCAL);
+    widgets.hovered.bg_fill = light::FAINT;
+    widgets.hovered.weak_bg_fill = light::SUBTLE;
+    widgets.hovered.fg_stroke = Stroke::new(1.0, light::IMPORTANT_GLOBAL);
+    widgets.hovered.bg_stroke = Stroke::new(1.0, light::ACCENT);
     widgets.hovered.corner_radius = radius;
 
-    // `widgets.active.fg_stroke.color` is the resolution target of
-    // `Visuals::strong_text_color()` — it tints every
-    // `RichText::strong()` label, including the table column headers.
-    // Use `important_global` (dark purple in light mode) so strong
-    // text reads on the light backdrop. Mirrors the dark-mode fix in
-    // `dark_visuals` where the same field was pointing at backdrop.
-    widgets.active.bg_fill = light::IMPORTANT_LOCAL;
-    widgets.active.weak_bg_fill = light::ACCENT;
-    widgets.active.fg_stroke = Stroke::new(1.5, light::IMPORTANT_GLOBAL);
-    widgets.active.bg_stroke = Stroke::new(1.5, light::IMPORTANT_GLOBAL);
+    widgets.active.bg_fill = light::SUBTLE;
+    widgets.active.weak_bg_fill = light::FAINT;
+    widgets.active.fg_stroke = Stroke::new(1.0, light::IMPORTANT_GLOBAL);
+    widgets.active.bg_stroke = Stroke::new(1.0, light::ACCENT);
     widgets.active.corner_radius = radius;
 
-    widgets.open.bg_fill = light::FOCUS;
-    widgets.open.fg_stroke = Stroke::new(1.0, light::BACKDROP);
+    widgets.open.bg_fill = light::FAINT;
+    widgets.open.fg_stroke = Stroke::new(1.0, light::IMPORTANT_GLOBAL);
     widgets.open.bg_stroke = Stroke::new(1.0, light::ACCENT);
     widgets.open.corner_radius = radius;
 
@@ -426,5 +291,67 @@ mod tests {
         assert_eq!(subtitle_color(ThemeMode::Light), light::IMPORTANT_LOCAL);
         assert_eq!(muted_color(ThemeMode::Dark), dark::MINOR);
         assert_eq!(muted_color(ThemeMode::Light), light::MINOR);
+    }
+
+    #[test]
+    fn widget_text_contrasts_in_all_states() {
+        for visuals in [dark_visuals(), light_visuals()] {
+            let panel = visuals.panel_fill;
+            for widget in [
+                visuals.widgets.noninteractive,
+                visuals.widgets.inactive,
+                visuals.widgets.hovered,
+                visuals.widgets.active,
+                visuals.widgets.open,
+            ] {
+                let text = widget.fg_stroke.color;
+                assert_contrast(text, panel);
+                assert_contrast(text, widget.bg_fill);
+                assert_contrast(text, widget.weak_bg_fill);
+            }
+        }
+    }
+
+    #[test]
+    fn widget_state_strokes_keep_layout_stable() {
+        for visuals in [dark_visuals(), light_visuals()] {
+            let widgets = visuals.widgets;
+            let width = widgets.inactive.bg_stroke.width;
+            assert_eq!(widgets.hovered.bg_stroke.width, width);
+            assert_eq!(widgets.active.bg_stroke.width, width);
+            assert_eq!(widgets.open.bg_stroke.width, width);
+        }
+    }
+
+    fn assert_contrast(foreground: Color32, background: Color32) {
+        const MIN_CONTRAST: f32 = 4.5;
+        let contrast = contrast_ratio(foreground, background);
+        assert!(
+            contrast >= MIN_CONTRAST,
+            "contrast {contrast:.2} below {MIN_CONTRAST} for fg={foreground:?} bg={background:?}",
+        );
+    }
+
+    fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+        let a = relative_luminance(a);
+        let b = relative_luminance(b);
+        let (light, dark) = if a > b { (a, b) } else { (b, a) };
+        (light + 0.05) / (dark + 0.05)
+    }
+
+    fn relative_luminance(color: Color32) -> f32 {
+        let r = linear_channel(color.r());
+        let g = linear_channel(color.g());
+        let b = linear_channel(color.b());
+        0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+
+    fn linear_channel(value: u8) -> f32 {
+        let value = f32::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
     }
 }

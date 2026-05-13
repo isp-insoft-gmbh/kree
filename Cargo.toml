@@ -33,11 +33,6 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 toml_edit = "0.25"
 
-# Font name-table parsing — used to resolve `family name` strings from
-# config.toml against installed `.ttf` / `.otf` / `.ttc` files. Already
-# in `Cargo.lock` as a transitive (egui → ab_glyph).
-ttf-parser = "0.25"
-
 # Async runtime — used only for scheduler timers + mpsc to UI
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "signal"] }
 
@@ -49,7 +44,7 @@ directories = "6"
 edit = { version = "0.1", features = ["better-path", "quoted-env"] }
 
 # GUI / tray / audio / TTS — egui re-exported via eframe::egui
-eframe = "0.34"
+eframe = { version = "0.34", default-features = false, features = ["glow"] }
 tray-icon = "0.24"
 rodio = "0.22"
 tts = "0.26"
@@ -67,9 +62,31 @@ auto-launch = "0.6"
 windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
+    "Win32_System_Console",
     "Win32_System_Registry",
 ] }
 
 # Emoji extraction
 unicode-segmentation = "1"
 unicode-properties = { version = "0.1", features = ["emoji"] }
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "parser"
+harness = false
+
+[[bench]]
+name = "config"
+harness = false
+
+[[bench]]
+name = "schedule"
+harness = false
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"

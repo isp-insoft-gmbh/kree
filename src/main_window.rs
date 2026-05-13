@@ -7,8 +7,8 @@ use crate::config::{Config, ConfigPatch, PopupPosition, ThemeChoice};
 use crate::parser::Reminder;
 use crate::theme::{ThemeMode, heading_color, muted_color, subtitle_color};
 
-pub const WIDTH: f32 = 980.0;
-pub const HEIGHT: f32 = 620.0;
+pub const WIDTH: f32 = 1180.0;
+pub const HEIGHT: f32 = 720.0;
 
 #[derive(Default)]
 pub struct MainWindowState {
@@ -42,10 +42,6 @@ pub fn render(
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
             ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
 
-            // Explicit heading colour. egui's default heading color
-            // resolves through `Visuals::strong_text_color`, but we go
-            // through the theme module so the title pops in both
-            // light and dark modes.
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("kree")
@@ -99,9 +95,6 @@ pub fn render(
             ui.separator();
             ui.add_space(10.0);
 
-            // Settings panel — bidirectional with config.toml. Edits
-            // here are persisted via `ConfigPatch` actions; manual file
-            // edits hot-reload through the watcher.
             ui.label(
                 egui::RichText::new("Settings")
                     .strong()
@@ -110,10 +103,6 @@ pub fn render(
             );
             ui.add_space(6.0);
 
-            // Two-column grid keeps the field labels and controls on
-            // their own baselines. The previous `horizontal_wrapped`
-            // mixed checkbox heights with combo-box heights and ended
-            // up looking ragged.
             egui::Grid::new("settings-grid")
                 .num_columns(2)
                 .spacing([16.0, 8.0])
@@ -184,42 +173,56 @@ pub fn render(
             }
 
             let now = Local::now();
-
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("reminders-grid")
-                    .num_columns(5)
-                    .striped(true)
-                    .spacing([22.0, 10.0])
-                    .min_col_width(80.0)
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Schedule").strong());
-                        ui.label(egui::RichText::new("Icon").strong());
-                        ui.label(egui::RichText::new("Message").strong());
-                        ui.label(egui::RichText::new("Next fire").strong());
-                        ui.label(egui::RichText::new("Last fired").strong());
-                        ui.end_row();
-
-                        for reminder in reminders {
-                            ui.label(egui::RichText::new(&reminder.schedule).monospace());
-                            ui.label(egui::RichText::new(&reminder.icon).size(22.0));
-                            ui.label(&reminder.body);
-
-                            let next = reminder
-                                .cron
-                                .find_next_occurrence(&now, false)
-                                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-                                .unwrap_or_else(|_| "—".into());
-                            ui.label(egui::RichText::new(next).monospace());
-
-                            let last = match last_fired.get(&reminder.schedule) {
-                                Some(t) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
-                                None => "—".into(),
-                            };
-                            ui.label(egui::RichText::new(last).monospace());
-                            ui.end_row();
-                        }
-                    });
+            let mut sorted_reminders: Vec<_> = reminders
+                .iter()
+                .map(|reminder| {
+                    let next = reminder
+                        .cron
+                        .find_next_occurrence(&now, false)
+                        .expect("parsed reminder cron should have a next occurrence");
+                    (reminder, next)
+                })
+                .collect();
+            sorted_reminders.sort_by(|(a_reminder, a_next), (b_reminder, b_next)| {
+                a_next
+                    .cmp(b_next)
+                    .then_with(|| a_reminder.schedule.cmp(&b_reminder.schedule))
+                    .then_with(|| a_reminder.body.cmp(&b_reminder.body))
             });
+
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui::Grid::new("reminders-grid")
+                        .num_columns(5)
+                        .striped(true)
+                        .spacing([22.0, 10.0])
+                        .min_col_width(80.0)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("Schedule").strong());
+                            ui.label(egui::RichText::new("Icon").strong());
+                            ui.label(egui::RichText::new("Message").strong());
+                            ui.label(egui::RichText::new("Next fire").strong());
+                            ui.label(egui::RichText::new("Last fired").strong());
+                            ui.end_row();
+
+                            for (reminder, next) in sorted_reminders {
+                                ui.label(egui::RichText::new(&reminder.schedule).monospace());
+                                ui.label(egui::RichText::new(&reminder.icon).size(22.0));
+                                ui.label(&reminder.body);
+
+                                let next = next.format("%Y-%m-%d %H:%M").to_string();
+                                ui.label(egui::RichText::new(next).monospace());
+
+                                let last = match last_fired.get(&reminder.schedule) {
+                                    Some(t) => t.format("%Y-%m-%d %H:%M:%S").to_string(),
+                                    None => "—".into(),
+                                };
+                                ui.label(egui::RichText::new(last).monospace());
+                                ui.end_row();
+                            }
+                        });
+                });
         });
 
     actions

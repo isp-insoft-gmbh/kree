@@ -4,21 +4,6 @@
 // default console subsystem so `cargo run` shows stderr.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod audio;
-mod autostart;
-mod config;
-mod editor;
-mod fonts;
-mod logging;
-mod main_window;
-mod parser;
-mod paths;
-mod popup;
-mod scheduler;
-mod theme;
-mod tray;
-mod watcher;
-
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::Arc;
@@ -32,10 +17,17 @@ use single_instance::SingleInstance;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tray_icon::menu::MenuEvent;
+use tray_icon::menu::MenuId;
 use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
-use crate::scheduler::{ReminderEvent, Scheduler};
-use crate::theme::ThemeMode;
+use kree::scheduler::{ReminderEvent, Scheduler};
+use kree::theme::ThemeMode;
+use kree::{
+    UiFire, audio, autostart, config, editor, logging, main_window, parser, paths, popup, theme,
+    tray, watcher,
+};
+
+const STALE_FIRE_WINDOW: Duration = Duration::from_secs(90);
 
 /// Messages from the tokio side to the eframe UI.
 #[derive(Debug)]
@@ -46,6 +38,7 @@ pub enum UiMessage {
         schedule: String,
         at: DateTime<Local>,
     },
+    Shutdown,
     /// `true` = the user switched Windows into light mode; `false` = dark.
     /// Polled from the registry on a 1 s tick — we only emit on change.
     SystemThemeChanged(bool),
@@ -58,16 +51,17 @@ pub struct SnapshotPayload {
     pub config: config::Config,
 }
 
-#[derive(Debug)]
-pub struct UiFire {
-    pub icon: String,
-    pub body: String,
-    pub fired_at: DateTime<Local>,
-    pub visible: Arc<AtomicBool>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayMenuAction {
+    Quit,
+    EditReminders,
+    OpenLog,
+    None,
 }
 
 fn main() -> Result<()> {
     let _log_guard = logging::init()?;
+    attach_parent_console_for_ctrl_c();
 
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "unknown".into());
     let mutex_name = format!("kree-singleton-{user}");
@@ -84,36 +78,14 @@ fn main() -> Result<()> {
     info!(silent, "kree starting (user={user})");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
+        .worker_threads(1)
+        .enable_time()
         .build()?;
     let runtime_handle = runtime.handle().clone();
 
     let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UiMessage>();
     let (reload_tx, reload_rx) = mpsc::unbounded_channel::<()>();
     let paused = Arc::new(AtomicBool::new(false));
-
-    let runtime_for_async = runtime_handle.clone();
-    let reload_tx_for_watcher = reload_tx.clone();
-    let paused_for_async = Arc::clone(&paused);
-    let ui_tx_for_async = ui_tx.clone();
-    runtime_handle.spawn(async move {
-        if let Err(e) = run_async(
-            runtime_for_async,
-            ui_tx_for_async,
-            reload_rx,
-            reload_tx_for_watcher,
-            paused_for_async,
-        )
-        .await
-        {
-            warn!(error = %e, "async lifecycle exited with error");
-        }
-    });
-
-    // Poll the Windows app-mode registry key once per second and push a
-    // SystemThemeChanged on every transition. Aborts cleanly when the
-    // runtime is dropped at eframe exit.
-    runtime_handle.spawn(watch_system_theme(ui_tx));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -128,15 +100,17 @@ fn main() -> Result<()> {
         "kree",
         options,
         Box::new(move |cc| {
-            // Initial font install uses default config; the first
-            // Snapshot from run_async will trigger a re-install if
-            // the user has font.* set.
-            theme::install_fonts(&cc.egui_ctx, &config::Config::default());
+            theme::install_fonts(&cc.egui_ctx);
             theme::apply(&cc.egui_ctx, ThemeMode::Dark);
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Visible(false));
             Ok(Box::new(App::new(
                 cc.egui_ctx.clone(),
+                runtime_handle.clone(),
+                ui_tx.clone(),
                 ui_rx,
                 reload_tx,
+                reload_rx,
                 paused,
             )?))
         }),
@@ -148,8 +122,25 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn attach_parent_console_for_ctrl_c() {
+    use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole, GetConsoleWindow};
+
+    if !unsafe { GetConsoleWindow() }.is_invalid() {
+        return;
+    }
+
+    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) }.is_ok() {
+        info!("attached to parent console for Ctrl+C handling");
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console_for_ctrl_c() {}
+
 async fn run_async(
     runtime: tokio::runtime::Handle,
+    ctx: egui::Context,
     ui_tx: mpsc::UnboundedSender<UiMessage>,
     mut reload_rx: mpsc::UnboundedReceiver<()>,
     reload_tx_for_watcher: mpsc::UnboundedSender<()>,
@@ -174,10 +165,14 @@ async fn run_async(
 
     let mut current_reminders = load_reminders(&reminders_path);
     let mut current_config = load_config(&config_path);
-    let _ = ui_tx.send(UiMessage::Snapshot(SnapshotPayload {
-        reminders: current_reminders.clone(),
-        config: current_config.clone(),
-    }));
+    send_ui(
+        &ui_tx,
+        &ctx,
+        UiMessage::Snapshot(SnapshotPayload {
+            reminders: current_reminders.clone(),
+            config: current_config.clone(),
+        }),
+    );
     info!(
         reminders = current_reminders.len(),
         chime = current_config.chime,
@@ -196,7 +191,7 @@ async fn run_async(
                     info!(schedule = %event.schedule, "skipping fire (paused)");
                     continue;
                 }
-                handle_fire(&runtime, &ui_tx, event, &current_config);
+                handle_fire(&runtime, &ctx, &ui_tx, event, &current_config);
             }
             Some(()) = reload_rx.recv() => {
                 let new_reminders = load_reminders(&reminders_path);
@@ -231,10 +226,14 @@ async fn run_async(
                     current_config = new_config;
                 }
 
-                let _ = ui_tx.send(UiMessage::Snapshot(SnapshotPayload {
-                    reminders: current_reminders.clone(),
-                    config: current_config.clone(),
-                }));
+                send_ui(
+                    &ui_tx,
+                    &ctx,
+                    UiMessage::Snapshot(SnapshotPayload {
+                        reminders: current_reminders.clone(),
+                        config: current_config.clone(),
+                    }),
+                );
             }
             else => break,
         }
@@ -244,6 +243,7 @@ async fn run_async(
 
 fn handle_fire(
     runtime: &tokio::runtime::Handle,
+    ctx: &egui::Context,
     ui_tx: &mpsc::UnboundedSender<UiMessage>,
     event: ReminderEvent,
     config: &config::Config,
@@ -276,10 +276,14 @@ fn handle_fire(
         });
     }
 
-    let _ = ui_tx.send(UiMessage::LastFired {
-        schedule: event.schedule.clone(),
-        at: event.fired_at,
-    });
+    send_ui(
+        ui_tx,
+        ctx,
+        UiMessage::LastFired {
+            schedule: event.schedule.clone(),
+            at: event.fired_at,
+        },
+    );
 
     let fire = UiFire {
         icon: event.icon,
@@ -287,7 +291,19 @@ fn handle_fire(
         fired_at: event.fired_at,
         visible,
     };
-    let _ = ui_tx.send(UiMessage::Fire(fire));
+    send_ui(ui_tx, ctx, UiMessage::Fire(fire));
+}
+
+fn send_ui(
+    ui_tx: &mpsc::UnboundedSender<UiMessage>,
+    ctx: &egui::Context,
+    message: UiMessage,
+) -> bool {
+    let sent = ui_tx.send(message).is_ok();
+    if sent {
+        ctx.request_repaint();
+    }
+    sent
 }
 
 fn open_editor() -> Result<()> {
@@ -362,10 +378,27 @@ fn decode_apps_use_light_theme(value: u32) -> bool {
     value == 1
 }
 
-async fn watch_system_theme(ui_tx: mpsc::UnboundedSender<UiMessage>) {
+fn classify_tray_menu_id(
+    id: &MenuId,
+    quit_id: &MenuId,
+    edit_id: &MenuId,
+    log_id: &MenuId,
+) -> TrayMenuAction {
+    if id == quit_id {
+        TrayMenuAction::Quit
+    } else if id == edit_id {
+        TrayMenuAction::EditReminders
+    } else if id == log_id {
+        TrayMenuAction::OpenLog
+    } else {
+        TrayMenuAction::None
+    }
+}
+
+async fn watch_system_theme(ctx: egui::Context, ui_tx: mpsc::UnboundedSender<UiMessage>) {
     let mut last = read_apps_use_light_theme();
     // Push the initial value so any non-default consumers can sync up.
-    let _ = ui_tx.send(UiMessage::SystemThemeChanged(last));
+    send_ui(&ui_tx, &ctx, UiMessage::SystemThemeChanged(last));
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.tick().await; // first tick fires immediately — discard
     loop {
@@ -373,10 +406,22 @@ async fn watch_system_theme(ui_tx: mpsc::UnboundedSender<UiMessage>) {
         let now = read_apps_use_light_theme();
         if now != last {
             last = now;
-            if ui_tx.send(UiMessage::SystemThemeChanged(now)).is_err() {
+            if !send_ui(&ui_tx, &ctx, UiMessage::SystemThemeChanged(now)) {
                 // UI gone; bail out so the task can drop.
                 return;
             }
+        }
+    }
+}
+
+async fn watch_ctrl_c(ctx: egui::Context, ui_tx: mpsc::UnboundedSender<UiMessage>) {
+    match tokio::signal::ctrl_c().await {
+        Ok(()) => {
+            info!("Ctrl+C received; requesting shutdown");
+            send_ui(&ui_tx, &ctx, UiMessage::Shutdown);
+        }
+        Err(error) => {
+            warn!(%error, "Ctrl+C handler failed");
         }
     }
 }
@@ -416,6 +461,8 @@ struct App {
     /// `UiMessage::SystemThemeChanged` from the registry poll task.
     system_is_light: bool,
     last_fired: HashMap<String, DateTime<Local>>,
+    applied_theme: Option<ThemeMode>,
+    shutting_down: bool,
     /// Tray menu events are forwarded into this channel by a callback we
     /// install on `MenuEvent::set_event_handler`. The callback also calls
     /// `Context::request_repaint`, which is the only way to wake the
@@ -429,8 +476,11 @@ struct App {
 impl App {
     fn new(
         ctx: egui::Context,
+        runtime_handle: tokio::runtime::Handle,
+        ui_tx: mpsc::UnboundedSender<UiMessage>,
         ui_rx: mpsc::UnboundedReceiver<UiMessage>,
         reload_tx: mpsc::UnboundedSender<()>,
+        reload_rx: mpsc::UnboundedReceiver<()>,
         paused: Arc<AtomicBool>,
     ) -> Result<Self> {
         let tray = tray::build()?;
@@ -459,6 +509,32 @@ impl App {
             tray_ctx.request_repaint();
         }));
 
+        let runtime_for_async = runtime_handle.clone();
+        let reload_tx_for_watcher = reload_tx.clone();
+        let paused_for_async = Arc::clone(&paused);
+        let ui_tx_for_async = ui_tx.clone();
+        let ctx_for_async = ctx.clone();
+        runtime_handle.spawn(async move {
+            if let Err(e) = run_async(
+                runtime_for_async,
+                ctx_for_async,
+                ui_tx_for_async,
+                reload_rx,
+                reload_tx_for_watcher,
+                paused_for_async,
+            )
+            .await
+            {
+                warn!(error = %e, "async lifecycle exited with error");
+            }
+        });
+
+        // Poll the Windows app-mode registry key once per second and push a
+        // SystemThemeChanged on every transition. Aborts cleanly when the
+        // runtime is dropped at eframe exit.
+        runtime_handle.spawn(watch_system_theme(ctx.clone(), ui_tx.clone()));
+        runtime_handle.spawn(watch_ctrl_c(ctx.clone(), ui_tx));
+
         Ok(Self {
             tray,
             ui_rx,
@@ -471,6 +547,8 @@ impl App {
             config: config::Config::default(),
             system_is_light: read_apps_use_light_theme(),
             last_fired: HashMap::new(),
+            applied_theme: None,
+            shutting_down: false,
             menu_rx,
             tray_event_rx,
         })
@@ -521,10 +599,6 @@ impl App {
                 }
             }
             main_window::MainWindowAction::SetConfig(patch) => {
-                // Optimistic local update so the UI reflects the change
-                // immediately. The watcher echo from the disk write will
-                // re-broadcast the same Snapshot via the feedback-loop
-                // guard's no-op path.
                 apply_patch_local(&mut self.config, patch);
 
                 let path = match paths::config_path() {
@@ -541,6 +615,15 @@ impl App {
                 }
             }
         }
+    }
+
+    fn request_shutdown(&mut self, ctx: &egui::Context) {
+        if self.shutting_down {
+            return;
+        }
+        self.shutting_down = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.request_repaint();
     }
 }
 
@@ -569,25 +652,34 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        let mode = self.effective_theme();
-        // Re-assert visuals every frame. eframe's default style can
-        // leak through if we only set it in the creator closure, and
-        // the user can toggle config.theme at any time. Idempotent.
-        theme::apply(&ctx, mode);
+        let mut mode = self.effective_theme();
+        self.apply_theme_if_needed(&ctx, mode);
 
         if ctx.input(|i| i.viewport().close_requested()) {
             // Window-X always means "hide to tray". Real exit goes
-            // through the Quit menu, which calls process::exit directly.
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.main_visible = false;
+            // through explicit shutdown paths such as tray Quit or Ctrl+C.
+            if !self.shutting_down {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.main_visible = false;
+            }
         }
 
         // Drain UI messages from the tokio side.
         while let Ok(msg) = self.ui_rx.try_recv() {
             match msg {
                 UiMessage::Fire(fire) => {
+                    if fire_is_stale(fire.fired_at, Local::now()) {
+                        fire.visible.store(false, Ordering::Release);
+                        warn!(
+                            body = %fire.body,
+                            fired_at = %fire.fired_at,
+                            "dropping stale reminder fire"
+                        );
+                        continue;
+                    }
                     let anchor = self.tray.rect_anchor();
+                    mode = self.effective_theme();
                     let position =
                         popup::compute_position(&self.popups, anchor, self.config.popup_position);
                     info!(
@@ -609,20 +701,22 @@ impl eframe::App for App {
                         theme = config.theme.as_str(),
                         "main window snapshot updated"
                     );
-                    let fonts_changed = self.config.font != config.font;
                     self.reminders = reminders;
                     self.config = config;
-                    if fonts_changed {
-                        info!("font config changed; rebuilding font atlas");
-                        theme::install_fonts(&ctx, &self.config);
-                    }
+                    mode = self.effective_theme();
+                    self.apply_theme_if_needed(&ctx, mode);
                 }
                 UiMessage::LastFired { schedule, at } => {
                     self.last_fired.insert(schedule, at);
                 }
+                UiMessage::Shutdown => {
+                    self.request_shutdown(&ctx);
+                }
                 UiMessage::SystemThemeChanged(is_light) => {
                     info!(is_light, "system theme changed");
                     self.system_is_light = is_light;
+                    mode = self.effective_theme();
+                    self.apply_theme_if_needed(&ctx, mode);
                 }
             }
         }
@@ -630,22 +724,27 @@ impl eframe::App for App {
         // Drain tray menu events from our own channel (see App::new).
         while let Ok(menu_event) = self.menu_rx.try_recv() {
             let id = menu_event.id();
-            if id == &self.tray.quit_id {
-                info!("Quit menu clicked; exiting");
-                // The hidden root viewport doesn't reliably honor
-                // `ViewportCommand::Close` (eframe stays alive driving
-                // popups + tray), so go straight to a process exit.
-                // Tracing's non-blocking appender may lose its tail —
-                // acceptable for an explicit user-initiated quit.
-                std::process::exit(0);
-            } else if id == &self.tray.edit_id {
-                if let Err(e) = open_editor() {
-                    warn!(error = %e, "edit reminders failed");
+            match classify_tray_menu_id(
+                id,
+                &self.tray.quit_id,
+                &self.tray.edit_id,
+                &self.tray.log_id,
+            ) {
+                TrayMenuAction::Quit => {
+                    info!("Quit menu clicked; exiting");
+                    std::process::exit(0);
                 }
-            } else if id == &self.tray.log_id
-                && let Err(e) = open_log()
-            {
-                warn!(error = %e, "open log failed");
+                TrayMenuAction::EditReminders => {
+                    if let Err(e) = open_editor() {
+                        warn!(error = %e, "edit reminders failed");
+                    }
+                }
+                TrayMenuAction::OpenLog => {
+                    if let Err(e) = open_log() {
+                        warn!(error = %e, "open log failed");
+                    }
+                }
+                TrayMenuAction::None => {}
             }
         }
 
@@ -666,29 +765,42 @@ impl eframe::App for App {
             }
         }
 
-        // Always render main-window contents into egui's frame buffer,
-        // even when the window is hidden. Otherwise a freshly-shown
-        // window flashes empty for one frame before the content lands.
-        let actions = main_window::render(
-            ui,
-            &mut self.window_state,
-            &self.reminders,
-            &self.config,
-            &self.last_fired,
-            mode,
-        );
-        for action in actions {
-            self.handle_main_window_action(action);
+        if self.main_visible {
+            let actions = main_window::render(
+                ui,
+                &mut self.window_state,
+                &self.reminders,
+                &self.config,
+                &self.last_fired,
+                mode,
+            );
+            for action in actions {
+                self.handle_main_window_action(action);
+            }
         }
 
         self.popups.retain_mut(|popup| popup.show(&ctx));
 
-        // egui only repaints on input by default; we drive it so try_recv
-        // keeps draining, 30s auto-dismiss fires on time, and Quit clicks
-        // surface within one tick. 33 ms ≈ 30 fps — plenty for our use,
-        // and "Quit takes a frame" no longer feels sluggish.
-        ctx.request_repaint_after(Duration::from_millis(33));
+        if !self.popups.is_empty() {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
     }
+}
+
+impl App {
+    fn apply_theme_if_needed(&mut self, ctx: &egui::Context, mode: ThemeMode) {
+        if self.applied_theme == Some(mode) {
+            return;
+        }
+        theme::apply(ctx, mode);
+        self.applied_theme = Some(mode);
+    }
+}
+
+fn fire_is_stale(fired_at: DateTime<Local>, now: DateTime<Local>) -> bool {
+    now.signed_duration_since(fired_at)
+        .to_std()
+        .is_ok_and(|age| age > STALE_FIRE_WINDOW)
 }
 
 #[cfg(test)]
@@ -712,5 +824,42 @@ mod theme_decoder_tests {
         for v in [2u32, 42, u32::MAX] {
             assert!(!decode_apps_use_light_theme(v), "value {v} should be dark");
         }
+    }
+
+    #[test]
+    fn tray_menu_ids_route_to_expected_actions() {
+        let quit = MenuId::new("quit");
+        let edit = MenuId::new("edit");
+        let log = MenuId::new("log");
+        let unknown = MenuId::new("unknown");
+
+        assert_eq!(
+            classify_tray_menu_id(&quit, &quit, &edit, &log),
+            TrayMenuAction::Quit
+        );
+        assert_eq!(
+            classify_tray_menu_id(&edit, &quit, &edit, &log),
+            TrayMenuAction::EditReminders
+        );
+        assert_eq!(
+            classify_tray_menu_id(&log, &quit, &edit, &log),
+            TrayMenuAction::OpenLog
+        );
+        assert_eq!(
+            classify_tray_menu_id(&unknown, &quit, &edit, &log),
+            TrayMenuAction::None
+        );
+    }
+
+    #[test]
+    fn recent_fire_is_not_stale() {
+        let now = Local::now();
+        assert!(!fire_is_stale(now - chrono::Duration::seconds(30), now));
+    }
+
+    #[test]
+    fn old_fire_is_stale() {
+        let now = Local::now();
+        assert!(fire_is_stale(now - chrono::Duration::minutes(2), now));
     }
 }

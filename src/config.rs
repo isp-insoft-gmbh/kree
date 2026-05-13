@@ -38,16 +38,6 @@ popup_position = \"tray\"
 # and updates within ~1 s when toggled. Other values: \"dark\", \"light\".
 theme = \"system\"
 
-# Optional fonts. Names are matched against installed system fonts
-# (case-insensitive). Empty / missing keys fall through to the bundled
-# JetBrains Mono Nerd Font + Segoe UI / Cascadia chain. Examples:
-#   proportional = \"Segoe UI\"
-#   monospace    = \"Cascadia Code\"
-#   fallbacks    = [\"Segoe UI Emoji\", \"Symbols Nerd Font\"]
-[font]
-proportional = \"\"
-monospace = \"\"
-fallbacks = []
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -119,18 +109,6 @@ impl ThemeChoice {
     pub const ALL: &'static [ThemeChoice] = &[Self::System, Self::Dark, Self::Light];
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
-#[serde(default)]
-pub struct FontConfig {
-    /// Preferred proportional family. Empty = use bundled defaults.
-    pub proportional: String,
-    /// Preferred monospace family. Empty = use bundled defaults.
-    pub monospace: String,
-    /// Additional families to append to both family chains as
-    /// fallbacks (good for emoji / nerd glyphs / scripts).
-    pub fallbacks: Vec<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -138,7 +116,6 @@ pub struct Config {
     pub speak: bool,
     pub popup_position: PopupPosition,
     pub theme: ThemeChoice,
-    pub font: FontConfig,
 }
 
 impl Default for Config {
@@ -148,7 +125,6 @@ impl Default for Config {
             speak: true,
             popup_position: PopupPosition::Tray,
             theme: ThemeChoice::System,
-            font: FontConfig::default(),
         }
     }
 }

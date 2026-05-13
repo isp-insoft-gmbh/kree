@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use croner::Cron;
@@ -38,14 +39,24 @@ pub struct ParseReport {
 /// Parse a reminders file. Comments and blank lines are silently skipped;
 /// invalid lines collect into [`ParseReport::errors`] without aborting.
 pub fn parse(input: &str) -> ParseReport {
-    let mut report = ParseReport::default();
+    let mut report = ParseReport {
+        reminders: Vec::with_capacity((input.len() / 64).max(4)),
+        errors: Vec::new(),
+    };
+    let mut cron_cache = HashMap::new();
+    let use_cron_cache = input.len() > 512;
     for (i, raw) in input.lines().enumerate() {
         let lineno = i + 1;
         let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        match parse_line(trimmed) {
+        let parsed = if use_cron_cache {
+            parse_line_with_cache(trimmed, &mut cron_cache)
+        } else {
+            parse_line_uncached(trimmed)
+        };
+        match parsed {
             Ok(r) => report.reminders.push(r),
             Err(e) => report.errors.push((lineno, e)),
         }
@@ -56,6 +67,43 @@ pub fn parse(input: &str) -> ParseReport {
 /// Parse a single non-empty, non-comment line. Caller is responsible for
 /// having already stripped comments and blanks.
 pub fn parse_line(line: &str) -> Result<Reminder, ParseLineError> {
+    parse_line_uncached(line)
+}
+
+fn parse_line_with_cache(
+    line: &str,
+    cron_cache: &mut HashMap<String, Cron>,
+) -> Result<Reminder, ParseLineError> {
+    let (schedule_part, message_part) = line
+        .split_once('|')
+        .ok_or(ParseLineError::MissingSeparator)?;
+
+    let schedule = schedule_part.trim().to_string();
+    let message = message_part.trim();
+    if message.is_empty() {
+        return Err(ParseLineError::EmptyMessage);
+    }
+
+    let cron = match cron_cache.get(&schedule) {
+        Some(cron) => cron.clone(),
+        None => {
+            let cron = Cron::from_str(&schedule)
+                .map_err(|e| ParseLineError::InvalidCron(e.to_string()))?;
+            cron_cache.insert(schedule.clone(), cron.clone());
+            cron
+        }
+    };
+
+    let (icon, body) = extract_icon(message);
+    Ok(Reminder {
+        cron,
+        schedule,
+        icon,
+        body,
+    })
+}
+
+fn parse_line_uncached(line: &str) -> Result<Reminder, ParseLineError> {
     let (schedule_part, message_part) = line
         .split_once('|')
         .ok_or(ParseLineError::MissingSeparator)?;

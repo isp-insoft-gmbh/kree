@@ -14,7 +14,7 @@ use crate::config::PopupPosition;
 use crate::theme::ThemeMode;
 
 pub const POPUP_WIDTH: f32 = 320.0;
-pub const POPUP_HEIGHT: f32 = 100.0;
+pub const POPUP_HEIGHT: f32 = 132.0;
 
 const AUTO_DISMISS: Duration = Duration::from_secs(30);
 const FADE_IN: Duration = Duration::from_millis(180);
@@ -108,36 +108,36 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
         elapsed.as_secs_f32() / FADE_IN.as_secs_f32()
     };
 
-    // CentralPanel::show against a Context is still the canonical
-    // multi-viewport entry point; the rename to show_inside is for
-    // nested-Ui usage. Allow the deprecation here.
-    #[allow(deprecated)]
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::default()
-                .fill(ctx.style().visuals.window_fill())
-                .stroke(ctx.style().visuals.window_stroke())
-                .inner_margin(egui::Margin::symmetric(12, 10)),
-        )
+    egui::Area::new(egui::Id::new("popup-content"))
+        .fixed_pos(egui::pos2(0.0, 0.0))
         .show(ctx, |ui| {
+            ui.set_min_size(egui::vec2(POPUP_WIDTH, POPUP_HEIGHT));
             ui.multiply_opacity(alpha);
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&popup.icon).size(40.0));
-                ui.add_space(8.0);
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(&popup.body).size(15.0));
-                    ui.label(
-                        egui::RichText::new(popup.fired_at.format("%H:%M:%S").to_string())
-                            .size(11.0)
-                            .weak(),
-                    );
-                    ui.add_space(4.0);
-                    if ui.button("Dismiss").clicked() {
-                        popup.visible.store(false, Ordering::Release);
-                        ctx.send_viewport_cmd(ViewportCommand::Close);
-                    }
+            let visuals = &ctx.global_style().visuals;
+            egui::Frame::default()
+                .fill(visuals.window_fill())
+                .stroke(visuals.window_stroke())
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    ui.set_min_size(egui::vec2(POPUP_WIDTH - 24.0, POPUP_HEIGHT - 22.0));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&popup.icon).size(40.0));
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(&popup.body).size(15.0));
+                            ui.label(
+                                egui::RichText::new(popup.fired_at.format("%H:%M:%S").to_string())
+                                    .size(11.0)
+                                    .weak(),
+                            );
+                            ui.add_space(4.0);
+                            if ui.button("Dismiss").clicked() {
+                                popup.visible.store(false, Ordering::Release);
+                                ctx.send_viewport_cmd(ViewportCommand::Close);
+                            }
+                        });
+                    });
                 });
-            });
         });
 
     // Drive the fade until it completes; egui won't repaint on its own.
@@ -291,36 +291,36 @@ mod tests {
         let popups: Vec<PopupHandle> = Vec::new();
         let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // x: cx - W/2 = 1000 - 160 = 840
-        // y: top - H - TRAY_GAP = 1040 - 100 - 8 = 932
+        // y: top - H - TRAY_GAP = 1040 - 132 - 8 = 900
         assert!((pos.0 - 840.0).abs() < 0.1);
-        assert!((pos.1 - 932.0).abs() < 0.1);
+        assert!((pos.1 - 900.0).abs() < 0.1);
     }
 
     #[test]
     fn tray_second_popup_stacks_above_first() {
-        let popups = vec![fake_handle(932.0)];
+        let popups = vec![fake_handle(900.0)];
         let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
-        // y: 932 - 100 - 8 = 824
-        assert!((pos.1 - 824.0).abs() < 0.1);
+        // y: 900 - 132 - 8 = 760
+        assert!((pos.1 - 760.0).abs() < 0.1);
     }
 
     #[test]
     fn tray_third_popup_stacks_above_topmost_existing() {
-        let popups = vec![fake_handle(932.0), fake_handle(824.0)];
+        let popups = vec![fake_handle(900.0), fake_handle(760.0)];
         let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
-        // y: 824 - 100 - 8 = 716
-        assert!((pos.1 - 716.0).abs() < 0.1);
+        // y: 760 - 132 - 8 = 620
+        assert!((pos.1 - 620.0).abs() < 0.1);
     }
 
     #[test]
     fn tray_dismissed_middle_popup_leaves_gap() {
-        // Middle popup at y=824 was dismissed and removed; new popup
-        // should still go above the topmost remaining (y=716), not
+        // Middle popup at y=760 was dismissed and removed; new popup
+        // should still go above the topmost remaining (y=620), not
         // refill the gap.
-        let popups = vec![fake_handle(932.0), fake_handle(716.0)];
+        let popups = vec![fake_handle(900.0), fake_handle(620.0)];
         let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
-        // y: 716 - 100 - 8 = 608
-        assert!((pos.1 - 608.0).abs() < 0.1);
+        // y: 620 - 132 - 8 = 480
+        assert!((pos.1 - 480.0).abs() < 0.1);
     }
 
     fn anchor_for_test(position: PopupPosition) -> (f32, f32) {
@@ -337,24 +337,24 @@ mod tests {
 
     #[test]
     fn fixed_anchors_against_fake_work_area() {
-        // POPUP_WIDTH=320, POPUP_HEIGHT=100, EDGE_GAP=16
+        // POPUP_WIDTH=320, POPUP_HEIGHT=132, EDGE_GAP=16
         // work: 0,0 → 1920,1040
         // top:    16
-        // bottom: 1040 - 100 - 16 = 924
+        // bottom: 1040 - 132 - 16 = 892
         // left:   16
         // right:  1920 - 320 - 16 = 1584
         // cx_screen: 960 - 160 = 800
-        // cy_screen: 520 - 50  = 470
+        // cy_screen: 520 - 66  = 454
         let cases: &[(PopupPosition, (f32, f32))] = &[
             (PopupPosition::TopLeft, (16.0, 16.0)),
             (PopupPosition::TopCenter, (800.0, 16.0)),
             (PopupPosition::TopRight, (1584.0, 16.0)),
-            (PopupPosition::LeftCenter, (16.0, 470.0)),
-            (PopupPosition::Center, (800.0, 470.0)),
-            (PopupPosition::RightCenter, (1584.0, 470.0)),
-            (PopupPosition::BottomLeft, (16.0, 924.0)),
-            (PopupPosition::BottomCenter, (800.0, 924.0)),
-            (PopupPosition::BottomRight, (1584.0, 924.0)),
+            (PopupPosition::LeftCenter, (16.0, 454.0)),
+            (PopupPosition::Center, (800.0, 454.0)),
+            (PopupPosition::RightCenter, (1584.0, 454.0)),
+            (PopupPosition::BottomLeft, (16.0, 892.0)),
+            (PopupPosition::BottomCenter, (800.0, 892.0)),
+            (PopupPosition::BottomRight, (1584.0, 892.0)),
         ];
         for (pos, expected) in cases {
             let actual = anchor_for_test(*pos);
@@ -368,18 +368,18 @@ mod tests {
     #[test]
     fn top_anchored_stacks_downward() {
         // top_left first popup at (16, 16); second should land at
-        // y = 16 + 100 + 8 = 124.
+        // y = 16 + 132 + 8 = 156.
         let first = fake_handle(16.0);
         let pos = compute_position(&[first], None, PopupPosition::TopLeft);
-        assert!((pos.1 - 124.0).abs() < 1.0, "{pos:?}");
+        assert!((pos.1 - 156.0).abs() < 1.0, "{pos:?}");
     }
 
     #[test]
     fn bottom_anchored_stacks_upward() {
-        // bottom_right first popup with bottom = 924; second at
-        // y = 924 - 100 - 8 = 816.
-        let first = fake_handle(924.0);
+        // bottom_right first popup with top = 892; second at
+        // y = 892 - 132 - 8 = 752.
+        let first = fake_handle(892.0);
         let pos = compute_position(&[first], None, PopupPosition::BottomRight);
-        assert!((pos.1 - 816.0).abs() < 1.0, "{pos:?}");
+        assert!((pos.1 - 752.0).abs() < 1.0, "{pos:?}");
     }
 }
