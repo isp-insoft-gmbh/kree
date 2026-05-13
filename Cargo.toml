@@ -50,7 +50,7 @@ edit = { version = "0.1", features = ["better-path", "quoted-env"] }
 
 # GUI / tray / audio / TTS — egui re-exported via eframe::egui
 eframe = "0.34"
-tray-icon = "0.23"
+tray-icon = "0.24"
 rodio = "0.22"
 tts = "0.26"
 # PNG decode for the embedded tray icon. `image` is already a transitive
