@@ -10,10 +10,35 @@ Use this skill for kree release work.
 ## Release Flow
 
 1. Make sure `trunk` is green.
-2. Create `RELEASE_NOTES.md` for every release.
-3. Tag the release commit with `v*`.
-4. Push the tag.
-5. GitHub Actions builds `kree.exe` and publishes the GitHub Release.
+2. Pick the next SemVer version.
+3. Update `Cargo.toml`.
+4. Create `RELEASE_NOTES.md` for every release.
+5. Commit the version bump and release notes.
+6. Tag the release commit with `v*`.
+7. Push the tag.
+8. GitHub Actions builds `kree.exe` and publishes the GitHub Release.
+
+## Version
+
+Use SemVer tags: `vMAJOR.MINOR.PATCH`.
+
+Examples:
+- `v0.1.0`
+- `v0.1.1`
+- `v1.0.0`
+- `v0.1.0-rc1`
+
+Before tagging:
+- Update `Cargo.toml` `package.version` to match the tag without `v`.
+- Regenerate/check `Cargo.lock` if the package version changes.
+- Commit the version bump and `RELEASE_NOTES.md` together.
+
+Tag rule:
+- `Cargo.toml` version `0.1.0` -> tag `v0.1.0`
+- `Cargo.toml` version `0.1.0-rc1` -> tag `v0.1.0-rc1`
+
+Prerelease:
+- Tags containing `-`, like `v0.1.0-rc1`, are marked prerelease by the workflow.
 
 ## RELEASE_NOTES.md
 
