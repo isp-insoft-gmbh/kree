@@ -1,6 +1,6 @@
 [package]
 name = "kree"
-version = "0.0.1-rc2"
+version = "0.0.1-rc3"
 edition = "2024"
 license = "MIT"
 description = "Cron-scheduled reminders in your Windows tray."
