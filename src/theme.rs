@@ -75,6 +75,12 @@ const NOTO_EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf"
 
 /// Register the bundled Nerd Font plus an emoji-symbol fallback.
 pub fn install_fonts(ctx: &egui::Context) {
+    let fonts = font_definitions();
+    info!(fonts = ?["jetbrains-mono-nf", "noto-emoji"], "fonts loaded");
+    ctx.set_fonts(fonts);
+}
+
+fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
 
     fonts.font_data.insert(
@@ -86,20 +92,18 @@ pub fn install_fonts(ctx: &egui::Context) {
         Arc::new(FontData::from_static(NOTO_EMOJI)),
     );
 
-    info!(fonts = ?["jetbrains-mono-nf", "noto-emoji"], "fonts loaded");
+    prepend_font(&mut fonts, FontFamily::Proportional, "noto-emoji");
+    prepend_font(&mut fonts, FontFamily::Proportional, "jetbrains-mono-nf");
+    prepend_font(&mut fonts, FontFamily::Monospace, "noto-emoji");
+    prepend_font(&mut fonts, FontFamily::Monospace, "jetbrains-mono-nf");
+    fonts
+}
 
-    if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
-        family.clear();
-        family.push("jetbrains-mono-nf".into());
-        family.push("noto-emoji".into());
+fn prepend_font(fonts: &mut FontDefinitions, family: FontFamily, name: &'static str) {
+    if let Some(family) = fonts.families.get_mut(&family) {
+        family.retain(|existing| existing != name);
+        family.insert(0, name.into());
     }
-    if let Some(family) = fonts.families.get_mut(&FontFamily::Monospace) {
-        family.clear();
-        family.push("jetbrains-mono-nf".into());
-        family.push("noto-emoji".into());
-    }
-
-    ctx.set_fonts(fonts);
 }
 
 fn apply_text_styles(ctx: &egui::Context) {
@@ -321,6 +325,50 @@ mod tests {
             assert_eq!(widgets.active.bg_stroke.width, width);
             assert_eq!(widgets.open.bg_stroke.width, width);
         }
+    }
+
+    #[test]
+    fn bundled_fonts_are_prepended_without_dropping_system_fallbacks() {
+        let defaults = FontDefinitions::default();
+        let fonts = font_definitions();
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            let names = fonts.families.get(&family).expect("font family exists");
+            assert_eq!(names[0], "jetbrains-mono-nf");
+            assert_eq!(names[1], "noto-emoji");
+            for default in defaults
+                .families
+                .get(&family)
+                .expect("default font family exists")
+                .iter()
+                .filter(|name| *name != "jetbrains-mono-nf" && *name != "noto-emoji")
+            {
+                assert!(
+                    names.contains(default),
+                    "{family:?} should retain default fallback {default}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prepend_font_moves_existing_font_without_losing_fallbacks() {
+        let mut fonts = FontDefinitions::default();
+        let family = fonts
+            .families
+            .get_mut(&FontFamily::Proportional)
+            .expect("proportional family exists");
+        family.insert(0, "existing".into());
+        family.push("preferred".into());
+
+        prepend_font(&mut fonts, FontFamily::Proportional, "preferred");
+
+        let family = fonts
+            .families
+            .get(&FontFamily::Proportional)
+            .expect("proportional family exists");
+        assert_eq!(family[0], "preferred");
+        assert_eq!(family.iter().filter(|name| *name == "preferred").count(), 1);
+        assert!(family.iter().any(|name| name == "existing"));
     }
 
     fn assert_contrast(foreground: Color32, background: Color32) {

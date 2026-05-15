@@ -28,6 +28,9 @@ use kree::{
 };
 
 const STALE_FIRE_WINDOW: Duration = Duration::from_secs(90);
+const DELIVERED_OCCURRENCE_RETENTION: chrono::Duration = chrono::Duration::days(1);
+
+type OccurrenceKey = (String, String, String, i64);
 
 /// Messages from the tokio side to the eframe UI.
 #[derive(Debug)]
@@ -183,12 +186,24 @@ async fn run_async(
 
     let (sched_tx, mut sched_rx) = mpsc::channel::<ReminderEvent>(64);
     let mut scheduler = Scheduler::spawn(current_reminders.clone(), sched_tx.clone());
+    let mut delivered_occurrences = HashMap::<OccurrenceKey, DateTime<Local>>::new();
 
     loop {
         tokio::select! {
             Some(event) = sched_rx.recv() => {
                 if paused.load(Ordering::Acquire) {
                     info!(schedule = %event.schedule, "skipping fire (paused)");
+                    continue;
+                }
+                if occurrence_already_dispatched(&mut delivered_occurrences, &event) {
+                    warn!(
+                        schedule = %event.schedule,
+                        icon = %event.icon,
+                        body = %event.body,
+                        scheduled_for = %event.scheduled_for,
+                        fired_at = %event.fired_at,
+                        "skipping already dispatched reminder occurrence"
+                    );
                     continue;
                 }
                 handle_fire(&runtime, &ctx, &ui_tx, event, &current_config);
@@ -241,6 +256,23 @@ async fn run_async(
     Ok(())
 }
 
+fn occurrence_already_dispatched(
+    delivered_occurrences: &mut HashMap<OccurrenceKey, DateTime<Local>>,
+    event: &ReminderEvent,
+) -> bool {
+    delivered_occurrences.retain(|_, dispatched_at| {
+        event.fired_at.signed_duration_since(*dispatched_at) <= DELIVERED_OCCURRENCE_RETENTION
+    });
+
+    let key = (
+        event.schedule.clone(),
+        event.icon.clone(),
+        event.body.clone(),
+        event.scheduled_for.timestamp(),
+    );
+    delivered_occurrences.insert(key, event.fired_at).is_some()
+}
+
 fn handle_fire(
     runtime: &tokio::runtime::Handle,
     ctx: &egui::Context,
@@ -252,6 +284,7 @@ fn handle_fire(
         schedule = %event.schedule,
         icon = %event.icon,
         body = %event.body,
+        scheduled_for = %event.scheduled_for,
         fired_at = %event.fired_at,
         "reminder fired"
     );
@@ -861,5 +894,55 @@ mod theme_decoder_tests {
     fn old_fire_is_stale() {
         let now = Local::now();
         assert!(fire_is_stale(now - chrono::Duration::minutes(2), now));
+    }
+
+    #[test]
+    fn identical_occurrence_is_suppressed() {
+        let now = Local::now();
+        let scheduled_for = now + chrono::Duration::minutes(1);
+        let mut delivered = HashMap::new();
+        let first = ReminderEvent {
+            schedule: "* * * * *".into(),
+            icon: "🔔".into(),
+            body: "stand up".into(),
+            scheduled_for,
+            fired_at: now,
+        };
+        let duplicate = ReminderEvent {
+            fired_at: now + chrono::Duration::seconds(1),
+            ..first.clone()
+        };
+        let next_occurrence = ReminderEvent {
+            scheduled_for: scheduled_for + chrono::Duration::minutes(1),
+            fired_at: now + chrono::Duration::minutes(1),
+            ..first.clone()
+        };
+
+        assert!(!occurrence_already_dispatched(&mut delivered, &first));
+        assert!(occurrence_already_dispatched(&mut delivered, &duplicate));
+        assert!(!occurrence_already_dispatched(
+            &mut delivered,
+            &next_occurrence
+        ));
+    }
+
+    #[test]
+    fn different_body_for_same_occurrence_time_is_not_suppressed() {
+        let now = Local::now();
+        let mut delivered = HashMap::new();
+        let first = ReminderEvent {
+            schedule: "* * * * *".into(),
+            icon: "🔔".into(),
+            body: "stand up".into(),
+            scheduled_for: now + chrono::Duration::minutes(1),
+            fired_at: now,
+        };
+        let second = ReminderEvent {
+            body: "drink water".into(),
+            ..first.clone()
+        };
+
+        assert!(!occurrence_already_dispatched(&mut delivered, &first));
+        assert!(!occurrence_already_dispatched(&mut delivered, &second));
     }
 }

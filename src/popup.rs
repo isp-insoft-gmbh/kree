@@ -20,6 +20,7 @@ const AUTO_DISMISS: Duration = Duration::from_secs(30);
 const FADE_IN: Duration = Duration::from_millis(180);
 const TRAY_GAP: f32 = 8.0;
 const STACK_GAP: f32 = 8.0;
+const FRAME_INSET: f32 = 1.0;
 
 /// One live popup. The shared `visible` flag is observed by the 2-second
 /// TTS gate (in `run_async`) to decide whether to speak.
@@ -109,9 +110,9 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
     };
 
     egui::Area::new(egui::Id::new("popup-content"))
-        .fixed_pos(egui::pos2(0.0, 0.0))
+        .fixed_pos(frame_pos())
         .show(ctx, |ui| {
-            ui.set_min_size(egui::vec2(POPUP_WIDTH, POPUP_HEIGHT));
+            ui.set_min_size(frame_min_size());
             ui.multiply_opacity(alpha);
             let visuals = &ctx.global_style().visuals;
             egui::Frame::default()
@@ -119,7 +120,7 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
                 .stroke(visuals.window_stroke())
                 .inner_margin(egui::Margin::symmetric(12, 10))
                 .show(ui, |ui| {
-                    ui.set_min_size(egui::vec2(POPUP_WIDTH - 24.0, POPUP_HEIGHT - 22.0));
+                    ui.set_min_size(frame_body_min_size());
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(&popup.icon).size(40.0));
                         ui.add_space(8.0);
@@ -144,6 +145,24 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
     if alpha < 1.0 {
         ctx.request_repaint();
     }
+}
+
+fn frame_pos() -> egui::Pos2 {
+    egui::pos2(FRAME_INSET, FRAME_INSET)
+}
+
+fn frame_min_size() -> egui::Vec2 {
+    egui::vec2(
+        POPUP_WIDTH - FRAME_INSET * 2.0,
+        POPUP_HEIGHT - FRAME_INSET * 2.0,
+    )
+}
+
+fn frame_body_min_size() -> egui::Vec2 {
+    egui::vec2(
+        POPUP_WIDTH - FRAME_INSET * 2.0 - 24.0,
+        POPUP_HEIGHT - FRAME_INSET * 2.0 - 20.0,
+    )
 }
 
 /// Compute the top-left position for a new popup given the currently
@@ -284,6 +303,13 @@ mod tests {
             visible,
         };
         PopupHandle::new(fire, (100.0, top_y), ThemeMode::Dark)
+    }
+
+    #[test]
+    fn popup_frame_is_inset_so_stroke_is_not_clipped() {
+        assert_eq!(frame_pos(), egui::pos2(1.0, 1.0));
+        assert_eq!(frame_min_size(), egui::vec2(318.0, 130.0));
+        assert_eq!(frame_body_min_size(), egui::vec2(294.0, 110.0));
     }
 
     #[test]

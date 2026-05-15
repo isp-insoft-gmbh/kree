@@ -14,6 +14,7 @@ pub struct ReminderEvent {
     pub schedule: String,
     pub icon: String,
     pub body: String,
+    pub scheduled_for: DateTime<Local>,
     pub fired_at: DateTime<Local>,
 }
 
@@ -76,6 +77,7 @@ async fn run_one(reminder: Reminder, tx: mpsc::Sender<ReminderEvent>) {
             schedule: reminder.schedule.clone(),
             icon: reminder.icon.clone(),
             body: reminder.body.clone(),
+            scheduled_for: next,
             fired_at: Local::now(),
         };
         if tx.send(event).await.is_err() {
