@@ -1,8 +1,7 @@
 ## Changes
 
-- Reminder popups now keep default system font fallbacks alongside the bundled fonts.
+- No user-facing behavior changes in this prerelease.
 
 ## Fixes
 
-- Prevented duplicate reminders for the same scheduled occurrence.
-- Fixed clipped popup borders.
+- Removed unused Linux tray and audio codec dependencies from the Windows build to keep release checks clean.
