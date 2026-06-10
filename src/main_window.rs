@@ -10,6 +10,48 @@ use crate::theme::{ThemeMode, heading_color, muted_color, subtitle_color};
 pub const WIDTH: f32 = 1180.0;
 pub const HEIGHT: f32 = 720.0;
 
+pub(crate) fn title_version_label() -> &'static str {
+    concat!("v", env!("CARGO_PKG_VERSION"))
+}
+
+fn subtle_version_color(mode: ThemeMode) -> egui::Color32 {
+    let color = muted_color(mode);
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 150)
+}
+
+fn render_title_mark(ui: &mut egui::Ui, mode: ThemeMode) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+
+    let color = subtitle_color(mode);
+    let fill = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 36);
+    let stroke = egui::Stroke::new(1.5, color);
+    let (outline, midline_start, midline_end) = title_mark_geometry(rect.shrink(1.5));
+
+    ui.painter()
+        .add(egui::Shape::convex_polygon(outline.to_vec(), fill, stroke));
+    ui.painter()
+        .line_segment([midline_start, midline_end], egui::Stroke::new(1.25, color));
+}
+
+fn title_mark_geometry(rect: egui::Rect) -> ([egui::Pos2; 3], egui::Pos2, egui::Pos2) {
+    let center = rect.center();
+    let top = egui::pos2(center.x, rect.top());
+    let base_y = rect.bottom();
+    let half_width = rect.height() * 0.44;
+    let right = egui::pos2(center.x + half_width, base_y);
+    let left = egui::pos2(center.x - half_width, base_y);
+
+    let line_y = rect.top() + rect.height() * 0.62;
+    let line_half_width = half_width * 0.46;
+    let line_start = egui::pos2(center.x - line_half_width, line_y);
+    let line_end = egui::pos2(center.x + line_half_width, line_y);
+
+    ([top, right, left], line_start, line_end)
+}
+
 #[derive(Default)]
 pub struct MainWindowState {
     pub paused: bool,
@@ -50,10 +92,12 @@ pub fn render(
                         .color(heading_color(mode)),
                 );
                 ui.add_space(8.0);
+                render_title_mark(ui, mode);
+                ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new("⟁")
-                        .size(22.0)
-                        .color(subtitle_color(mode)),
+                    egui::RichText::new(title_version_label())
+                        .size(11.0)
+                        .color(subtle_version_color(mode)),
                 );
             });
             ui.label(
@@ -235,4 +279,36 @@ pub enum MainWindowAction {
     SetPaused(bool),
     SetAutostart(bool),
     SetConfig(ConfigPatch),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_version_label_is_visible_package_version() {
+        assert_eq!(
+            title_version_label(),
+            concat!("v", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn version_color_is_subtle_alpha() {
+        assert!(subtle_version_color(ThemeMode::Dark).a() < 255);
+        assert!(subtle_version_color(ThemeMode::Light).a() < 255);
+    }
+
+    #[test]
+    fn title_mark_geometry_stays_inside_allocated_rect() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(18.0, 18.0));
+        let (outline, midline_start, midline_end) = title_mark_geometry(rect);
+
+        for point in outline.into_iter().chain([midline_start, midline_end]) {
+            assert!(rect.contains(point), "point {point:?} outside {rect:?}");
+        }
+        assert_eq!(outline.len(), 3);
+        assert!(midline_start.x < midline_end.x);
+        assert!((midline_start.y - midline_end.y).abs() < f32::EPSILON);
+    }
 }
