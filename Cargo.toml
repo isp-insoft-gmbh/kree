@@ -44,7 +44,7 @@ directories = "6"
 edit = { version = "0.1", features = ["better-path", "quoted-env"] }
 
 # GUI / tray / audio / TTS — egui re-exported via eframe::egui
-eframe = { version = "0.34", default-features = false, features = ["glow"] }
+eframe = { version = "0.35", default-features = false, features = ["glow"] }
 tray-icon = { version = "0.24", default-features = false }
 rodio = { version = "0.22", default-features = false, features = ["playback", "lewton"] }
 tts = "0.26"
