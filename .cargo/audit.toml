@@ -1,0 +1,14 @@
+# cargo-audit configuration
+# https://github.com/rustsec/rustsec/blob/main/cargo-audit/audit.toml.example
+
+[advisories]
+# quick-xml 0.39.x only enters the graph through wayland-scanner, a Linux-only
+# build-time proc macro that parses the Wayland protocol XML shipped with the
+# crate. kree targets Windows, so this code is never built or run for us, and
+# wayland-scanner pins `quick-xml = "^0.39"`, which makes the 0.41 fix
+# unreachable until upstream bumps it. cargo-deny already filters these out via
+# its x86_64-pc-windows-msvc target graph; this keeps `cargo audit` consistent.
+ignore = [
+    "RUSTSEC-2026-0194", # quick-xml: quadratic run time on duplicate attribute names
+    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation
+]
