@@ -1,18 +1,18 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 
-use croner::Cron;
 use thiserror::Error;
 use unicode_properties::UnicodeEmoji;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::cron::Schedule;
+
 const DEFAULT_ICON: &str = "🔔";
 
 /// A single parsed reminder. The original schedule string is kept alongside
-/// the parsed `Cron` so it can be shown verbatim in the main window.
+/// the parsed [`Schedule`] so it can be shown verbatim in the main window.
 #[derive(Debug, Clone)]
 pub struct Reminder {
-    pub cron: Cron,
+    pub cron: Schedule,
     pub schedule: String,
     pub icon: String,
     pub body: String,
@@ -72,7 +72,7 @@ pub fn parse_line(line: &str) -> Result<Reminder, ParseLineError> {
 
 fn parse_line_with_cache(
     line: &str,
-    cron_cache: &mut HashMap<String, Cron>,
+    cron_cache: &mut HashMap<String, Schedule>,
 ) -> Result<Reminder, ParseLineError> {
     let (schedule_part, message_part) = line
         .split_once('|')
@@ -87,7 +87,7 @@ fn parse_line_with_cache(
     let cron = match cron_cache.get(&schedule) {
         Some(cron) => cron.clone(),
         None => {
-            let cron = Cron::from_str(&schedule)
+            let cron = Schedule::parse(&schedule)
                 .map_err(|e| ParseLineError::InvalidCron(e.to_string()))?;
             cron_cache.insert(schedule.clone(), cron.clone());
             cron
@@ -114,7 +114,8 @@ fn parse_line_uncached(line: &str) -> Result<Reminder, ParseLineError> {
         return Err(ParseLineError::EmptyMessage);
     }
 
-    let cron = Cron::from_str(&schedule).map_err(|e| ParseLineError::InvalidCron(e.to_string()))?;
+    let cron =
+        Schedule::parse(&schedule).map_err(|e| ParseLineError::InvalidCron(e.to_string()))?;
 
     let (icon, body) = extract_icon(message);
     Ok(Reminder {

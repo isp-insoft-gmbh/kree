@@ -15,6 +15,11 @@ feature-depth = 1
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
+# cargo-deny defaults this to "workspace", which would only flag unmaintained
+# crates we depend on directly. cargo-audit reported the whole tree, and this
+# is now the only supply-chain check in CI, so widen it to match rather than
+# quietly lose that coverage.
+unmaintained = "all"
 ignore = []
 
 [licenses]

@@ -1,0 +1,6 @@
+# actionlint does not know Blacksmith's self-hosted runner labels and would
+# otherwise flag every `runs-on` in this repo. Declare them so `actionlint
+# .github/workflows/*.yml` runs clean and stays useful as a pre-push check.
+self-hosted-runner:
+  labels:
+    - blacksmith-4vcpu-windows-2025

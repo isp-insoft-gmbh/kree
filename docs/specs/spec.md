@@ -25,7 +25,7 @@ All crate choices are deliberate. **Lean on crates aggressively** — custom cod
 | Language | Rust stable, edition 2024 | |
 | GUI | `eframe` / `egui` | Immediate-mode, ships well as single binary |
 | Tray icon | `tray-icon` | |
-| Cron parsing | `croner` | POSIX 5-field expressions, actively maintained |
+| Cron parsing | `croner` | POSIX 5-field expressions, actively maintained. Used only through `src/cron.rs`. |
 | Async runtime | `tokio` | Features: `rt-multi-thread`, `time`, `sync`, `macros` only |
 | Audio playback | `rodio` | Default features (includes vorbis/ogg decoding) |
 | TTS | `tts` | Wraps SAPI on Windows. Plan B if it breaks: call SAPI directly via `windows` crate (`ISpVoice::Speak`, ~30 lines). |
@@ -66,6 +66,7 @@ Project repo layout:
 │   │   ├── ci.yml
 │   │   ├── outdated.yml
 │   │   └── release.yml           ← tag-triggered release builds (T2)
+│   ├── actionlint.yaml           ← declares the Blacksmith runner label
 │   └── dependabot.yml
 ├── assets/
 │   ├── chime.ogg                 ← CC0 sound, embedded via include_bytes!
@@ -80,6 +81,7 @@ Project repo layout:
 ├── src/
 │   ├── main.rs
 │   ├── parser.rs
+│   ├── cron.rs                    ← facade over the cron backend (T7)
 │   ├── scheduler.rs
 │   ├── popup.rs
 │   ├── main_window.rs
@@ -124,10 +126,31 @@ Project repo layout:
 - Skip blank lines and lines starting with `#`.
 - Split on the **first** `|`. Both sides trimmed.
 - If no `|` present → log warning with line number, skip.
-- If cron expression doesn't validate via `croner::CronParser` → log warning with line number + parser error, skip.
+- If cron expression doesn't validate via `cron::Schedule::parse` → log warning with line number + parser error, skip.
 - If message is empty after trim → log warning, skip.
 - Valid lines become scheduled reminders.
 - **The parser never panics. Bad lines never block good lines.**
+- A line may parse and still never fire: `0 9 30 2 *` is a valid expression
+  naming a date that does not exist. `cron::Schedule::next_after` returns
+  `None` for these. The scheduler logs and drops the task; the main window
+  keeps the row and shows `never` in the "Next fire" column. **Neither may
+  panic.**
+
+### Cron semantics
+
+The 5-field expression grammar is the backend's, not ours (§ 9 — no custom
+DSL). But the meanings kree depends on are pinned by a golden table in
+`src/cron.rs`, so a backend upgrade or swap fails a test rather than silently
+rescheduling the user's reminders:
+
+- `next_after` is **exclusive** of the reference instant. § 5.1 recomputes
+  from `now` after every fire; an inclusive lookup would re-return the
+  occurrence that just fired and spin.
+- Sunday is `0`, `7`, and `SUN`.
+- Steps (`*/15`) snap forward to the next multiple; stepped ranges
+  (`9-17/4`) walk the range.
+- Six-field expressions are read **seconds-first**, not year-last.
+- An impossible date yields `None`, never an error the user sees.
 
 ### Icon handling
 
@@ -142,8 +165,8 @@ Project repo layout:
 ### 5.1 Background scheduler
 
 - On start, parse `reminders.txt` and spawn one `tokio` task per valid reminder.
-- Each task loops: `find_next_occurrence(now) → sleep_until(next) → send ReminderEvent → repeat`.
-- **Always recompute `find_next_occurrence` from `now`, never chain from the prior scheduled time.** This handles laptop sleep/suspend correctly — after wake, you fire once for the next future occurrence rather than firing late or losing it.
+- Each task loops: `next_after(now) → sleep_until(next) → send ReminderEvent → repeat`.
+- **Always recompute `next_after` from `now`, never chain from the prior scheduled time.** This handles laptop sleep/suspend correctly — after wake, you fire once for the next future occurrence rather than firing late or losing it.
 - Events flow over a `tokio::sync::mpsc` channel to the UI thread.
 - `notify-debouncer-mini` watches `reminders.txt`. On change: cancel all reminder tasks, re-parse, re-spawn.
 
@@ -214,19 +237,80 @@ Bundle one short, pleasant chime. Requirements:
 
 ## 7. CI
 
-GitHub Actions, `windows-latest` runner.
+GitHub Actions. Windows work runs on Blacksmith (`blacksmith-4vcpu-windows-2025`);
+everything platform-independent runs on GitHub-hosted `ubuntu-latest`, which is
+free for public repositories and therefore costs no Blacksmith minutes.
 
 Workflows:
 
-- `.github/workflows/ci.yml` — runs on every push/PR:
-  1. Build & test — `cargo build --release`, `cargo test --all-features`.
-  2. Lint — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
-  3. Security audit — `cargo-audit` against RustSec advisory DB. Fails on vulnerabilities.
-  4. Supply chain — `cargo-deny check` (licenses, bans, advisories, sources). Uses `deny.toml`.
-- `.github/workflows/outdated.yml` — scheduled weekly, opens/updates an issue if any deps are behind. Does not fail main CI.
+- `.github/workflows/ci.yml` — runs on every push/PR, three jobs:
+  1. **Build & Test** (Windows) — `cargo build --release`, `cargo test --all-features`.
+     Not `--all-targets` on the release build: that drags the criterion bench
+     tree through fat LTO for binaries nobody runs. Benches are compile-checked
+     by clippy instead.
+  2. **Lint** (Windows) — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
+  3. **Supply chain** (Linux) — `cargo deny check` (advisories, licenses, bans,
+     sources) using `deny.toml`, installed prebuilt via `taiki-e/install-action`.
+     There is deliberately **no separate `cargo-audit` job**: cargo-deny's
+     `[advisories]` section reads the same RustSec DB, and cargo-deny also
+     enforces the license allowlist, duplicate-version and wildcard bans, and
+     registry pinning, none of which cargo-audit does. `deny.toml` sets
+     `unmaintained = "all"` so the whole tree is scanned for unmaintained
+     crates, matching what cargo-audit used to report.
+     Nothing here compiles the crate, and `deny.toml` pins the graph to
+     `x86_64-pc-windows-msvc`, so the Windows dependency tree is evaluated
+     regardless of host.
+- `.github/workflows/outdated.yml` — scheduled weekly on Linux, opens/updates an
+  issue if any deps are behind. Does not fail main CI.
 - `.github/dependabot.yml` — covers `cargo` and `github-actions`, weekly cadence.
+- `.github/actionlint.yaml` — declares the Blacksmith runner label so
+  `actionlint .github/workflows/*.yml` runs clean.
 
-Use `Swatinem/rust-cache@v2` for build caching.
+**Warnings are denied by `Cargo.toml`'s `[lints]` table, not by a `RUSTFLAGS`
+env var in the workflow.** `RUSTFLAGS` applies to every dependency too, so one
+upstream warning would fail a build for something we cannot fix.
+
+`concurrency` cancels superseded **pull request** runs. Trunk runs are never
+cancelled: their result is what branch protection reads, and they are the only
+runs that populate the cache.
+
+**Job `name:` values are load-bearing.** `trunk`'s branch protection requires
+status checks *by name*, and a required check that no job produces stays pending
+forever — the PR cannot merge, and nothing in CI reports an error. Removing or
+renaming a job therefore means updating the required-check list in the same
+change. Dropping the `Security audit` job blocked #33 exactly this way.
+
+### Build caching
+
+`Swatinem/rust-cache@v2`, with `save-if: github.ref == 'refs/heads/trunk'`.
+
+That condition is the whole game. A GitHub Actions cache written on a PR branch
+can only be read back by that same branch. Since essentially every PR here is a
+short-lived dependabot branch, saving from PRs wrote a ~230 MB cache per job
+that nothing would ever restore — while evicting trunk's cache, the one PRs
+*can* read, from the repo's 10 GB budget. The symptom was a one-second "restore"
+followed by a full cold rebuild on every run. Save from trunk; restore
+everywhere.
+
+Blacksmith **does** serve this cache from its own backend, despite the log line
+reading `Cache Provider: github`. That line is rust-cache echoing its own
+`cache-provider` input — which cache *API* it speaks — not which server answers.
+The measured throughput settles it: 856 MB at **1096 MB/s** on Build & Test and
+230 MB at **836 MB/s** on Lint. Azure blob from a Windows VM does not do 1 GB/s;
+Blacksmith's transparent proxy does, and the runner's orphan-process list at
+job end shows `nginx` running locally to serve it.
+
+So the cache transfer is effectively free. What the save step actually spends
+its ~11 s on is `tar` + `zstd` compressing the target directory, plus
+rust-cache's own pruning — CPU on a 4-vCPU box, not network. Shrinking what
+lands in `target/` is therefore the lever that matters, which is a second reason
+the release build does not pass `--all-targets`.
+
+Do not reach for `cache-provider: blacksmith` — rust-cache only accepts `github`
+or `warpbuild`, and the `github` path is already the fast one here.
+Blacksmith's sticky disks (`useblacksmith/stickydisk@v1`) are the documented
+alternative for large caches, but they mount ext4 volumes with no documented
+Windows support, and both cached jobs here are Windows.
 
 ## 8. Build order (one commit per step)
 
@@ -236,7 +320,7 @@ Each step must end in a green `cargo check` and `cargo clippy`. Run the test sui
 2. **Single-instance guard** — `single-instance` mutex check at startup. If held, log + exit 0.
 3. **Logging** — `tracing` + `tracing-appender` writing to `<data_dir>/logs/app.log` (rolling daily). Resolve `<data_dir>` via `directories`.
 4. **Parser** — `src/parser.rs` with full unit tests covering: valid line, comment, blank, missing `|`, invalid cron, empty message, leading-emoji message, plain message (default icon). Use `croner` for cron validation, `unicode-segmentation` + `unicode-properties` for icon extraction.
-5. **Scheduler** — `src/scheduler.rs`. Spawn one tokio task per valid reminder, looping `find_next_occurrence(now) → sleep_until → send event`. UI thread receives events and logs them. No UI yet.
+5. **Scheduler** — `src/scheduler.rs`. Spawn one tokio task per valid reminder, looping `next_after(now) → sleep_until → send event`. UI thread receives events and logs them. No UI yet.
 6. **Tray icon** — `src/tray.rs`. `tray-icon` with quit menu item. Verify event loop coexists with scheduler. App can now be quit via tray.
 7. **Sound on fire** — `src/audio.rs`. `rodio` plays the embedded chime when an event arrives.
 8. **TTS with 2s delay** — Add SAPI speech via `tts` crate. After fire, schedule a 2-second timer; if popup is still visible (placeholder for now — popup arrives next step), speak. For this step, "popup visible" can be a stub that always returns true.

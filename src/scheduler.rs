@@ -26,7 +26,7 @@ pub struct Scheduler {
 
 impl Scheduler {
     /// Spawn one async task per reminder. Each task loops:
-    /// `find_next_occurrence(now) → sleep → send event`. The reference time
+    /// `next_after(now) → sleep → send event`. The reference time
     /// is recomputed from `Local::now()` on every iteration so wake-from-sleep
     /// fires once for the next future occurrence rather than catching up on
     /// missed ones (docs/specs/spec.md § 5.1).
@@ -51,16 +51,12 @@ impl Drop for Scheduler {
 async fn run_one(reminder: Reminder, tx: mpsc::Sender<ReminderEvent>) {
     loop {
         let now = Local::now();
-        let next = match reminder.cron.find_next_occurrence(&now, false) {
-            Ok(t) => t,
-            Err(e) => {
-                error!(
-                    schedule = %reminder.schedule,
-                    error = %e,
-                    "cron lookup failed; stopping this reminder"
-                );
-                return;
-            }
+        let Some(next) = reminder.cron.next_after(now) else {
+            error!(
+                schedule = %reminder.schedule,
+                "schedule has no upcoming occurrence; stopping this reminder"
+            );
+            return;
         };
 
         let delta = (next - now).to_std().unwrap_or(Duration::ZERO);
