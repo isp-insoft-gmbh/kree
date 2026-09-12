@@ -25,7 +25,7 @@ All crate choices are deliberate. **Lean on crates aggressively** — custom cod
 | Language | Rust stable, edition 2024 | |
 | GUI | `eframe` / `egui` | Immediate-mode, ships well as single binary |
 | Tray icon | `tray-icon` | |
-| Cron parsing | `croner` | POSIX 5-field expressions, actively maintained |
+| Cron parsing | `croner` | POSIX 5-field expressions, actively maintained. Used only through `src/cron.rs`. |
 | Async runtime | `tokio` | Features: `rt-multi-thread`, `time`, `sync`, `macros` only |
 | Audio playback | `rodio` | Default features (includes vorbis/ogg decoding) |
 | TTS | `tts` | Wraps SAPI on Windows. Plan B if it breaks: call SAPI directly via `windows` crate (`ISpVoice::Speak`, ~30 lines). |
@@ -80,6 +80,7 @@ Project repo layout:
 ├── src/
 │   ├── main.rs
 │   ├── parser.rs
+│   ├── cron.rs                    ← facade over the cron backend (T7)
 │   ├── scheduler.rs
 │   ├── popup.rs
 │   ├── main_window.rs
@@ -124,10 +125,31 @@ Project repo layout:
 - Skip blank lines and lines starting with `#`.
 - Split on the **first** `|`. Both sides trimmed.
 - If no `|` present → log warning with line number, skip.
-- If cron expression doesn't validate via `croner::CronParser` → log warning with line number + parser error, skip.
+- If cron expression doesn't validate via `cron::Schedule::parse` → log warning with line number + parser error, skip.
 - If message is empty after trim → log warning, skip.
 - Valid lines become scheduled reminders.
 - **The parser never panics. Bad lines never block good lines.**
+- A line may parse and still never fire: `0 9 30 2 *` is a valid expression
+  naming a date that does not exist. `cron::Schedule::next_after` returns
+  `None` for these. The scheduler logs and drops the task; the main window
+  keeps the row and shows `never` in the "Next fire" column. **Neither may
+  panic.**
+
+### Cron semantics
+
+The 5-field expression grammar is the backend's, not ours (§ 9 — no custom
+DSL). But the meanings kree depends on are pinned by a golden table in
+`src/cron.rs`, so a backend upgrade or swap fails a test rather than silently
+rescheduling the user's reminders:
+
+- `next_after` is **exclusive** of the reference instant. § 5.1 recomputes
+  from `now` after every fire; an inclusive lookup would re-return the
+  occurrence that just fired and spin.
+- Sunday is `0`, `7`, and `SUN`.
+- Steps (`*/15`) snap forward to the next multiple; stepped ranges
+  (`9-17/4`) walk the range.
+- Six-field expressions are read **seconds-first**, not year-last.
+- An impossible date yields `None`, never an error the user sees.
 
 ### Icon handling
 
@@ -142,8 +164,8 @@ Project repo layout:
 ### 5.1 Background scheduler
 
 - On start, parse `reminders.txt` and spawn one `tokio` task per valid reminder.
-- Each task loops: `find_next_occurrence(now) → sleep_until(next) → send ReminderEvent → repeat`.
-- **Always recompute `find_next_occurrence` from `now`, never chain from the prior scheduled time.** This handles laptop sleep/suspend correctly — after wake, you fire once for the next future occurrence rather than firing late or losing it.
+- Each task loops: `next_after(now) → sleep_until(next) → send ReminderEvent → repeat`.
+- **Always recompute `next_after` from `now`, never chain from the prior scheduled time.** This handles laptop sleep/suspend correctly — after wake, you fire once for the next future occurrence rather than firing late or losing it.
 - Events flow over a `tokio::sync::mpsc` channel to the UI thread.
 - `notify-debouncer-mini` watches `reminders.txt`. On change: cancel all reminder tasks, re-parse, re-spawn.
 
@@ -236,7 +258,7 @@ Each step must end in a green `cargo check` and `cargo clippy`. Run the test sui
 2. **Single-instance guard** — `single-instance` mutex check at startup. If held, log + exit 0.
 3. **Logging** — `tracing` + `tracing-appender` writing to `<data_dir>/logs/app.log` (rolling daily). Resolve `<data_dir>` via `directories`.
 4. **Parser** — `src/parser.rs` with full unit tests covering: valid line, comment, blank, missing `|`, invalid cron, empty message, leading-emoji message, plain message (default icon). Use `croner` for cron validation, `unicode-segmentation` + `unicode-properties` for icon extraction.
-5. **Scheduler** — `src/scheduler.rs`. Spawn one tokio task per valid reminder, looping `find_next_occurrence(now) → sleep_until → send event`. UI thread receives events and logs them. No UI yet.
+5. **Scheduler** — `src/scheduler.rs`. Spawn one tokio task per valid reminder, looping `next_after(now) → sleep_until → send event`. UI thread receives events and logs them. No UI yet.
 6. **Tray icon** — `src/tray.rs`. `tray-icon` with quit menu item. Verify event loop coexists with scheduler. App can now be quit via tray.
 7. **Sound on fire** — `src/audio.rs`. `rodio` plays the embedded chime when an event arrives.
 8. **TTS with 2s delay** — Add SAPI speech via `tts` crate. After fire, schedule a 2-second timer; if popup is still visible (placeholder for now — popup arrives next step), speak. For this step, "popup visible" can be a stub that always returns true.

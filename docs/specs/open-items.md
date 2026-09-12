@@ -5,6 +5,14 @@ Follow-ups not covered by `spec.md` or its build order. Items marked
 landed. Items marked `[ ]` are still open; each carries enough context
 for a future session to pick up.
 
+- [ ] **Fix the `0 0 * 9-17 * *` example in `spec.md` § 4.** It is six
+  fields, so it parses seconds-first: sec=0 min=0 hour=* dom=9-17 month=*
+  dow=* — "every minute, on the 9th through 17th of the month", not the
+  hourly "stand and stretch" it clearly intends. Current behavior is pinned
+  by `cron::tests::six_field_expression_is_seconds_first` so a fix is a
+  deliberate change, not a silent one. The intended line is probably
+  `0 9-17 * * *`. Needs a user decision on what the example should say.
+
 - [ ] **Push to the `isp-insoft` GitHub org.** Add a `git remote` for the
   ISP Insoft repo, push `main`, switch CI from "windows-latest scratch"
   to the org's standard runner pool if applicable, and replace the
