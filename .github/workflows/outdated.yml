@@ -10,16 +10,24 @@ permissions:
   contents: read
   issues: write
 
+# Nothing here builds kree — cargo-outdated resolves Cargo.toml against
+# crates.io — so this does not need a Windows runner, and GitHub-hosted Linux
+# is free for public repositories. It used to compile cargo-outdated from
+# source on a paid Windows runner every Monday.
 jobs:
   outdated:
     name: Check for outdated crates
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # Caches ~/.cargo/bin, so cargo-outdated is fetched once rather than
+      # reinstalled on every weekly run.
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-outdated
-        run: cargo install cargo-outdated --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-outdated
       - name: Run cargo-outdated
         id: outdated
         shell: bash

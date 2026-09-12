@@ -66,6 +66,7 @@ Project repo layout:
 │   │   ├── ci.yml
 │   │   ├── outdated.yml
 │   │   └── release.yml           ← tag-triggered release builds (T2)
+│   ├── actionlint.yaml           ← declares the Blacksmith runner label
 │   └── dependabot.yml
 ├── assets/
 │   ├── chime.ogg                 ← CC0 sound, embedded via include_bytes!
@@ -236,19 +237,53 @@ Bundle one short, pleasant chime. Requirements:
 
 ## 7. CI
 
-GitHub Actions, `windows-latest` runner.
+GitHub Actions. Windows work runs on Blacksmith (`blacksmith-4vcpu-windows-2025`);
+everything platform-independent runs on GitHub-hosted `ubuntu-latest`, which is
+free for public repositories and therefore costs no Blacksmith minutes.
 
 Workflows:
 
-- `.github/workflows/ci.yml` — runs on every push/PR:
-  1. Build & test — `cargo build --release`, `cargo test --all-features`.
-  2. Lint — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
-  3. Security audit — `cargo-audit` against RustSec advisory DB. Fails on vulnerabilities.
-  4. Supply chain — `cargo-deny check` (licenses, bans, advisories, sources). Uses `deny.toml`.
-- `.github/workflows/outdated.yml` — scheduled weekly, opens/updates an issue if any deps are behind. Does not fail main CI.
+- `.github/workflows/ci.yml` — runs on every push/PR, three jobs:
+  1. **Build & Test** (Windows) — `cargo build --release`, `cargo test --all-features`.
+     Not `--all-targets` on the release build: that drags the criterion bench
+     tree through fat LTO for binaries nobody runs. Benches are compile-checked
+     by clippy instead.
+  2. **Lint** (Windows) — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
+  3. **Supply chain** (Linux) — `cargo-audit` against the RustSec DB, then
+     `cargo-deny check` (licenses, bans, advisories, sources) using `deny.toml`.
+     Neither compiles the crate, and `deny.toml` pins the graph to
+     `x86_64-pc-windows-msvc`, so the Windows dependency tree is evaluated
+     regardless of host. Both tools come prebuilt via `taiki-e/install-action`.
+- `.github/workflows/outdated.yml` — scheduled weekly on Linux, opens/updates an
+  issue if any deps are behind. Does not fail main CI.
 - `.github/dependabot.yml` — covers `cargo` and `github-actions`, weekly cadence.
+- `.github/actionlint.yaml` — declares the Blacksmith runner label so
+  `actionlint .github/workflows/*.yml` runs clean.
 
-Use `Swatinem/rust-cache@v2` for build caching.
+**Warnings are denied by `Cargo.toml`'s `[lints]` table, not by a `RUSTFLAGS`
+env var in the workflow.** `RUSTFLAGS` applies to every dependency too, so one
+upstream warning would fail a build for something we cannot fix.
+
+`concurrency` cancels superseded **pull request** runs. Trunk runs are never
+cancelled: their result is what branch protection reads, and they are the only
+runs that populate the cache.
+
+### Build caching
+
+`Swatinem/rust-cache@v2`, with `save-if: github.ref == 'refs/heads/trunk'`.
+
+That condition is the whole game. A GitHub Actions cache written on a PR branch
+can only be read back by that same branch. Since essentially every PR here is a
+short-lived dependabot branch, saving from PRs wrote a ~230 MB cache per job
+that nothing would ever restore — while evicting trunk's cache, the one PRs
+*can* read, from the repo's 10 GB budget. The symptom was a one-second "restore"
+followed by a full cold rebuild on every run. Save from trunk; restore
+everywhere.
+
+Note that Blacksmith does **not** accelerate this cache — its log line reads
+`Cache Provider: github`. Blacksmith transparently backs `actions/cache` and the
+`setup-*` actions, but `Swatinem/rust-cache` is not among them, so this traffic
+goes to GitHub's backend.
 
 ## 8. Build order (one commit per step)
 
