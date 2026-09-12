@@ -10,7 +10,9 @@ This file is read by Claude Code at the start of every session in this repo. It 
    - `cargo check`
    - `cargo clippy --all-targets -- -D warnings`
    - `cargo test` (if tests are relevant to the change)
-   Do not commit if any of these fail.
+   Do not commit if any of these fail. On Linux these do not work as written —
+   see "Local verification on Linux" below for the cross-compiled equivalents.
+   Run them; do not push unverified work and let CI find it.
 4. **Before starting build-order step 1**, propose the exact crate versions you intend to pin in `Cargo.toml` and wait for the user's approval. Don't guess versions; check crates.io for the current stable.
 5. **Stop and ask** when blocked or uncertain. Don't guess at:
    - Ambiguities in the spec
@@ -19,6 +21,47 @@ This file is read by Claude Code at the start of every session in this repo. It 
    - Whether to add a feature beyond the spec
 6. **Do not add features outside the spec** without asking. No config files, CLI flags, telemetry, analytics, or "nice-to-haves" unless explicitly approved.
 7. **Lean on crates.** If a problem has a well-maintained crate, use it. Custom code is for glue and UI only. The spec lists the chosen crates — use those, don't substitute without asking.
+
+## Local verification on Linux
+
+CI runs on `windows-latest`, but the whole suite — check, clippy and the tests
+— can be run from a Linux box against the real Windows target. Do that before
+pushing rather than using CI as the first checker.
+
+Setup, once per machine:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+pip install ziglang cargo-zigbuild
+printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > /usr/local/bin/zig
+chmod +x /usr/local/bin/zig
+apt-get install -y --no-install-recommends wine64
+```
+
+Then, per change:
+
+```sh
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=/usr/lib/wine/wine64
+export WINEDEBUG=-all
+
+cargo fmt --check
+cargo-zigbuild check  --all-targets --target x86_64-pc-windows-gnu
+cargo-zigbuild clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+cargo-zigbuild test                 --target x86_64-pc-windows-gnu
+```
+
+`cargo fmt` is host-native and needs none of this.
+
+Why the indirection: a plain `cargo check` on Linux fails because `eframe` has
+no backend for the host, and cross-compiling to `x86_64-pc-windows-msvc` dies
+in `alloca`'s build script, which shells out to MSVC's `lib.exe`. `zig cc`
+supplies a mingw C toolchain that the build scripts accept, and `wine` runs the
+resulting test binaries.
+
+**Caveat:** this targets `*-windows-gnu` while CI targets `*-windows-msvc`. The
+only conditional compilation in our source is a bare `cfg(windows)`, true for
+both, so the gap is confined to dependency internals and linking. Close enough
+to catch our own mistakes; CI remains the authority on a green build.
 
 ## Commit message style
 

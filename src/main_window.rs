@@ -20,10 +20,10 @@ const NEVER_FIRES: &str = "never";
 /// A reminder whose schedule has no upcoming occurrence sorts last and keeps
 /// a `None` next-fire time. It must not be dropped from the table — the user
 /// needs to see the row to understand why nothing is happening.
-fn sort_by_next_fire<'a>(
-    reminders: &'a [Reminder],
+fn sort_by_next_fire(
+    reminders: &[Reminder],
     now: DateTime<Local>,
-) -> Vec<(&'a Reminder, Option<DateTime<Local>>)> {
+) -> Vec<(&Reminder, Option<DateTime<Local>>)> {
     let mut rows: Vec<_> = reminders
         .iter()
         .map(|reminder| (reminder, reminder.cron.next_after(now)))
