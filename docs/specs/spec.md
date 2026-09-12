@@ -274,6 +274,12 @@ upstream warning would fail a build for something we cannot fix.
 cancelled: their result is what branch protection reads, and they are the only
 runs that populate the cache.
 
+**Job `name:` values are load-bearing.** `trunk`'s branch protection requires
+status checks *by name*, and a required check that no job produces stays pending
+forever — the PR cannot merge, and nothing in CI reports an error. Removing or
+renaming a job therefore means updating the required-check list in the same
+change. Dropping the `Security audit` job blocked #33 exactly this way.
+
 ### Build caching
 
 `Swatinem/rust-cache@v2`, with `save-if: github.ref == 'refs/heads/trunk'`.
