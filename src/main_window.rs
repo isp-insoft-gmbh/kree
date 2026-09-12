@@ -10,6 +10,37 @@ use crate::theme::{ThemeMode, heading_color, muted_color, subtitle_color};
 pub const WIDTH: f32 = 1180.0;
 pub const HEIGHT: f32 = 720.0;
 
+/// Shown in the "Next fire" column for a schedule that never comes round
+/// again — `0 9 30 2 *` parses fine, but February 30th does not exist.
+const NEVER_FIRES: &str = "never";
+
+/// Order reminders for the table: soonest next fire first, then by schedule
+/// and body so the row order is stable between frames.
+///
+/// A reminder whose schedule has no upcoming occurrence sorts last and keeps
+/// a `None` next-fire time. It must not be dropped from the table — the user
+/// needs to see the row to understand why nothing is happening.
+fn sort_by_next_fire<'a>(
+    reminders: &'a [Reminder],
+    now: DateTime<Local>,
+) -> Vec<(&'a Reminder, Option<DateTime<Local>>)> {
+    let mut rows: Vec<_> = reminders
+        .iter()
+        .map(|reminder| (reminder, reminder.cron.next_after(now)))
+        .collect();
+    rows.sort_by(|(a_reminder, a_next), (b_reminder, b_next)| {
+        // `None` sorts before `Some` in Rust's ordering, so compare on
+        // `is_none()` first to push the never-firing rows to the bottom.
+        a_next
+            .is_none()
+            .cmp(&b_next.is_none())
+            .then_with(|| a_next.cmp(b_next))
+            .then_with(|| a_reminder.schedule.cmp(&b_reminder.schedule))
+            .then_with(|| a_reminder.body.cmp(&b_reminder.body))
+    });
+    rows
+}
+
 pub(crate) fn title_version_label() -> &'static str {
     concat!("v", env!("CARGO_PKG_VERSION"))
 }
@@ -216,23 +247,7 @@ pub fn render(
                 return;
             }
 
-            let now = Local::now();
-            let mut sorted_reminders: Vec<_> = reminders
-                .iter()
-                .map(|reminder| {
-                    let next = reminder
-                        .cron
-                        .find_next_occurrence(&now, false)
-                        .expect("parsed reminder cron should have a next occurrence");
-                    (reminder, next)
-                })
-                .collect();
-            sorted_reminders.sort_by(|(a_reminder, a_next), (b_reminder, b_next)| {
-                a_next
-                    .cmp(b_next)
-                    .then_with(|| a_reminder.schedule.cmp(&b_reminder.schedule))
-                    .then_with(|| a_reminder.body.cmp(&b_reminder.body))
-            });
+            let sorted_reminders = sort_by_next_fire(reminders, Local::now());
 
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
@@ -255,7 +270,10 @@ pub fn render(
                                 ui.label(egui::RichText::new(&reminder.icon).size(22.0));
                                 ui.label(&reminder.body);
 
-                                let next = next.format("%Y-%m-%d %H:%M").to_string();
+                                let next = match next {
+                                    Some(t) => t.format("%Y-%m-%d %H:%M").to_string(),
+                                    None => NEVER_FIRES.into(),
+                                };
                                 ui.label(egui::RichText::new(next).monospace());
 
                                 let last = match last_fired.get(&reminder.schedule) {
@@ -284,6 +302,46 @@ pub enum MainWindowAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::parse_line;
+    use chrono::TimeZone;
+
+    #[test]
+    fn never_firing_reminders_sort_last_and_keep_their_row() {
+        // February 30th never happens, so this one has no next occurrence.
+        let reminders = [
+            parse_line("0 9 30 2 * | impossible").expect("parses"),
+            parse_line("0 9 * * * | daily").expect("parses"),
+        ];
+        let now = Local
+            .with_ymd_and_hms(2026, 1, 5, 10, 0, 0)
+            .single()
+            .expect("unambiguous");
+
+        let rows = sort_by_next_fire(&reminders, now);
+
+        assert_eq!(rows.len(), 2, "no row may be dropped from the table");
+        assert_eq!(rows[0].0.body, "daily");
+        assert!(rows[0].1.is_some());
+        assert_eq!(rows[1].0.body, "impossible");
+        assert_eq!(rows[1].1, None);
+    }
+
+    #[test]
+    fn rows_are_ordered_by_soonest_next_fire() {
+        let reminders = [
+            parse_line("0 18 * * * | evening").expect("parses"),
+            parse_line("0 11 * * * | late morning").expect("parses"),
+        ];
+        let now = Local
+            .with_ymd_and_hms(2026, 1, 5, 10, 0, 0)
+            .single()
+            .expect("unambiguous");
+
+        let rows = sort_by_next_fire(&reminders, now);
+
+        assert_eq!(rows[0].0.body, "late morning");
+        assert_eq!(rows[1].0.body, "evening");
+    }
 
     #[test]
     fn title_version_label_is_visible_package_version() {

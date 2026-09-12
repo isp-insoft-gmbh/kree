@@ -14,7 +14,7 @@ fn next_occurrence_patterns(c: &mut Criterion) {
     for schedule in ["*/1 * * * *", "30 9-16 * * 1-5", "0 9 1 * *", "0 9 29 2 *"] {
         let reminder = parse_schedule(schedule);
         group.bench_with_input(schedule, &reminder, |b, reminder| {
-            b.iter(|| reminder.cron.find_next_occurrence(&now, false))
+            b.iter(|| reminder.cron.next_after(now))
         });
     }
     group.finish();
@@ -36,8 +36,8 @@ fn next_occurrence_batches(c: &mut Criterion) {
             b.iter(|| {
                 reminders
                     .iter()
-                    .map(|r| r.cron.find_next_occurrence(&now, false))
-                    .collect::<Result<Vec<_>, _>>()
+                    .map(|r| r.cron.next_after(now))
+                    .collect::<Option<Vec<_>>>()
             });
         });
     }

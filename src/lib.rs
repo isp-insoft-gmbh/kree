@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod autostart;
 pub mod config;
+pub mod cron;
 pub mod editor;
 pub mod logging;
 pub mod main_window;
