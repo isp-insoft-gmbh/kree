@@ -249,11 +249,17 @@ Workflows:
      tree through fat LTO for binaries nobody runs. Benches are compile-checked
      by clippy instead.
   2. **Lint** (Windows) — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
-  3. **Supply chain** (Linux) — `cargo-audit` against the RustSec DB, then
-     `cargo-deny check` (licenses, bans, advisories, sources) using `deny.toml`.
-     Neither compiles the crate, and `deny.toml` pins the graph to
+  3. **Supply chain** (Linux) — `cargo deny check` (advisories, licenses, bans,
+     sources) using `deny.toml`, installed prebuilt via `taiki-e/install-action`.
+     There is deliberately **no separate `cargo-audit` job**: cargo-deny's
+     `[advisories]` section reads the same RustSec DB, and cargo-deny also
+     enforces the license allowlist, duplicate-version and wildcard bans, and
+     registry pinning, none of which cargo-audit does. `deny.toml` sets
+     `unmaintained = "all"` so the whole tree is scanned for unmaintained
+     crates, matching what cargo-audit used to report.
+     Nothing here compiles the crate, and `deny.toml` pins the graph to
      `x86_64-pc-windows-msvc`, so the Windows dependency tree is evaluated
-     regardless of host. Both tools come prebuilt via `taiki-e/install-action`.
+     regardless of host.
 - `.github/workflows/outdated.yml` — scheduled weekly on Linux, opens/updates an
   issue if any deps are behind. Does not fail main CI.
 - `.github/dependabot.yml` — covers `cargo` and `github-actions`, weekly cadence.

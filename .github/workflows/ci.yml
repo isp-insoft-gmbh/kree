@@ -66,23 +66,27 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   supply-chain:
-    name: Supply chain (audit + deny)
-    # Was two Windows jobs. Neither tool compiles the crate — they read
-    # Cargo.lock — and deny.toml pins the graph to x86_64-pc-windows-msvc, so
-    # the Windows dependency tree is what gets evaluated whatever the host.
-    # GitHub-hosted Linux is free for public repositories, so this job now
-    # costs no Blacksmith minutes at all, and one job's setup instead of two.
+    name: Supply chain (cargo-deny)
+    # Was two Windows jobs, `cargo audit` and `cargo deny check`. cargo-deny is
+    # a strict superset: its [advisories] section reads the same RustSec DB
+    # cargo-audit does, and it additionally enforces the license allowlist,
+    # the duplicate-version and wildcard bans, and the registry pinning — all
+    # already configured in deny.toml. cargo-audit checked advisories and
+    # nothing else, so it was a whole job of duplicated coverage.
+    #
+    # Neither tool compiles the crate — they read Cargo.lock — and deny.toml
+    # pins the graph to x86_64-pc-windows-msvc, so the Windows dependency tree
+    # is what gets evaluated whatever the host. GitHub-hosted Linux is free for
+    # public repositories, so this costs no Blacksmith minutes at all.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # No rust-cache: nothing here compiles, and a third cache entry would
       # only crowd out the two that matter.
-      - name: Install cargo-audit + cargo-deny
+      - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit,cargo-deny
-      - name: Run audit
-        run: cargo audit
+          tool: cargo-deny
       - name: Run deny
         run: cargo deny check
