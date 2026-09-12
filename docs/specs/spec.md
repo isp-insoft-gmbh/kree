@@ -286,10 +286,25 @@ that nothing would ever restore — while evicting trunk's cache, the one PRs
 followed by a full cold rebuild on every run. Save from trunk; restore
 everywhere.
 
-Note that Blacksmith does **not** accelerate this cache — its log line reads
-`Cache Provider: github`. Blacksmith transparently backs `actions/cache` and the
-`setup-*` actions, but `Swatinem/rust-cache` is not among them, so this traffic
-goes to GitHub's backend.
+Blacksmith **does** serve this cache from its own backend, despite the log line
+reading `Cache Provider: github`. That line is rust-cache echoing its own
+`cache-provider` input — which cache *API* it speaks — not which server answers.
+The measured throughput settles it: 856 MB at **1096 MB/s** on Build & Test and
+230 MB at **836 MB/s** on Lint. Azure blob from a Windows VM does not do 1 GB/s;
+Blacksmith's transparent proxy does, and the runner's orphan-process list at
+job end shows `nginx` running locally to serve it.
+
+So the cache transfer is effectively free. What the save step actually spends
+its ~11 s on is `tar` + `zstd` compressing the target directory, plus
+rust-cache's own pruning — CPU on a 4-vCPU box, not network. Shrinking what
+lands in `target/` is therefore the lever that matters, which is a second reason
+the release build does not pass `--all-targets`.
+
+Do not reach for `cache-provider: blacksmith` — rust-cache only accepts `github`
+or `warpbuild`, and the `github` path is already the fast one here.
+Blacksmith's sticky disks (`useblacksmith/stickydisk@v1`) are the documented
+alternative for large caches, but they mount ext4 volumes with no documented
+Windows support, and both cached jobs here are Windows.
 
 ## 8. Build order (one commit per step)
 
