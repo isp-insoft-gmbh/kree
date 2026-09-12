@@ -38,7 +38,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"
 
 # Cron parsing / file watching / paths / editor
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-croner = "3"
+croner = "4"
 notify-debouncer-mini = "0.7"
 directories = "6"
 edit = { version = "0.1", features = ["better-path", "quoted-env"] }
