@@ -25,7 +25,7 @@ All crate choices are deliberate. **Lean on crates aggressively** — custom cod
 | Language | Rust stable, edition 2024 | |
 | GUI | `eframe` / `egui` | Immediate-mode, ships well as single binary |
 | Tray icon | `tray-icon` | |
-| Cron parsing | `croner` | POSIX 5-field expressions, actively maintained. Used only through `src/cron.rs`. |
+| Cron parsing | `croner` | POSIX 5-field expressions, actively maintained. Used only through `src/cron.rs`, which builds a `CronParser` with `sloppy_ranges` rather than using `Cron::from_str`. |
 | Async runtime | `tokio` | Features: `rt-multi-thread`, `time`, `sync`, `macros` only |
 | Audio playback | `rodio` | Default features (includes vorbis/ogg decoding) |
 | TTS | `tts` | Wraps SAPI on Windows. Plan B if it breaks: call SAPI directly via `windows` crate (`ISpVoice::Speak`, ~30 lines). |
@@ -150,6 +150,11 @@ rescheduling the user's reminders:
 - Steps (`*/15`) snap forward to the next multiple; stepped ranges
   (`9-17/4`) walk the range.
 - Six-field expressions are read **seconds-first**, not year-last.
+- Single-number step syntax (`5/5`, `0/15`, `/10`) is accepted. The backend
+  rejects it by default from croner 4 on, as non-compliant with
+  OCPS/vixie-cron; `src/cron.rs` opts back in via `sloppy_ranges` because
+  every earlier release of kree accepted it and a user's `reminders.txt`
+  must survive an upgrade. No example we ship uses the form.
 - An impossible date yields `None`, never an error the user sees.
 
 ### Icon handling

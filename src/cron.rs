@@ -11,10 +11,9 @@
 //! verifiable if something asserts that `*/30 9-17 * * 1-5` still means what
 //! we think it means.
 
-use std::str::FromStr;
-
 use chrono::{DateTime, Local};
 use croner::Cron;
+use croner::parser::CronParser;
 use thiserror::Error;
 
 /// A parsed cron schedule.
@@ -31,6 +30,23 @@ pub struct Schedule {
 #[error("{0}")]
 pub struct CronError(String);
 
+/// The parser every expression goes through.
+///
+/// `sloppy_ranges` keeps accepting single-number step syntax — `5/5`, `0/15`,
+/// `/10`. croner 4 rejects those by default as non-compliant with
+/// OCPS/vixie-cron, which is defensible for a new project and wrong for us:
+/// every previous release of kree accepted them. Without this, a
+/// `reminders.txt` line using one would start failing to parse on upgrade,
+/// and because the parser skips bad lines rather than aborting
+/// (`docs/specs/spec.md` § 4), the only symptom would be a warning in the log
+/// and a reminder that quietly never fires again.
+///
+/// No example we ship uses that form, so this is purely about not breaking
+/// files users already have. Pinned by `shortcut_step_syntax_is_accepted`.
+fn parser() -> CronParser {
+    CronParser::builder().sloppy_ranges(true).build()
+}
+
 impl Schedule {
     /// Parse a standard 5-field cron expression.
     ///
@@ -38,7 +54,8 @@ impl Schedule {
     /// accepted, because the backend accepts them and `docs/specs/spec.md`
     /// § 4 shows one. See `six_field_expression_is_seconds_first`.
     pub fn parse(expr: &str) -> Result<Self, CronError> {
-        Cron::from_str(expr)
+        parser()
+            .parse(expr)
             .map(|inner| Self { inner })
             .map_err(|e| CronError(e.to_string()))
     }
@@ -197,6 +214,27 @@ mod tests {
             next(expr, local(2026, 1, 17, 23, 0)),
             local(2026, 2, 9, 0, 0)
         );
+    }
+
+    /// Single-number step syntax stays accepted.
+    ///
+    /// croner 4 rejects `5/5` by default — "single number steps are not
+    /// allowed" — where croner 3 accepted it. kree opts back in via
+    /// `sloppy_ranges`, because a user's existing `reminders.txt` must keep
+    /// working across an upgrade. The original golden table missed this
+    /// entirely: it only covered `*/n` and `a-b/n`, so the whole suite passed
+    /// on croner 4 while this form broke.
+    #[test]
+    fn shortcut_step_syntax_is_accepted() {
+        let from = local(2026, 1, 5, 10, 0);
+        assert_eq!(next("5/5 * * * *", from), local(2026, 1, 5, 10, 5));
+        assert_eq!(next("0/15 * * * *", from), local(2026, 1, 5, 10, 15));
+        assert_eq!(next("/10 * * * *", from), local(2026, 1, 5, 10, 10));
+
+        // The compliant spellings must keep working too — `sloppy_ranges`
+        // widens what parses, it does not change what these mean.
+        assert_eq!(next("*/15 * * * *", from), local(2026, 1, 5, 10, 15));
+        assert_eq!(next("5-59/5 * * * *", from), local(2026, 1, 5, 10, 5));
     }
 
     /// A schedule naming a date that never occurs parses, then yields
