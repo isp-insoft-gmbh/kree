@@ -175,14 +175,27 @@ mod tests {
     ///
     /// `docs/specs/spec.md` § 4 lists `0 0 * 9-17 * *` as an example. It is
     /// six fields, so it parses as sec=0 min=0 hour=* dom=9-17 month=* dow=*
-    /// — every minute on the 9th through 17th of the month, which is almost
-    /// certainly not what that example intends. Pinned here as the current
-    /// behavior; see docs/specs/open-items.md.
+    /// — hourly on the hour, around the clock, but only on the 9th through
+    /// 17th of the *month*. The `9-17` the author meant as working hours
+    /// landed in the day-of-month field, because the extra leading field
+    /// shifts everything right. Pinned here as the current behavior; see
+    /// docs/specs/open-items.md.
     #[test]
     fn six_field_expression_is_seconds_first() {
+        let expr = "0 0 * 9-17 * *";
+
+        let first = next(expr, local(2026, 1, 5, 10, 0));
+        assert_eq!(first, local(2026, 1, 9, 0, 0));
+
+        // Hourly, not per-minute. `first` alone cannot tell those apart —
+        // both readings land on midnight of the 9th — so walk one more.
+        assert_eq!(next(expr, first), local(2026, 1, 9, 1, 0));
+
+        // And `9-17` is the day-of-month field, not the hour field: the last
+        // fire of the 17th is 23:00, then it jumps to the 9th of next month.
         assert_eq!(
-            next("0 0 * 9-17 * *", local(2026, 1, 5, 10, 0)),
-            local(2026, 1, 9, 0, 0)
+            next(expr, local(2026, 1, 17, 23, 0)),
+            local(2026, 2, 9, 0, 0)
         );
     }
 
