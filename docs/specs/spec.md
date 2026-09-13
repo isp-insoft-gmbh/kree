@@ -200,6 +200,13 @@ Per `ReminderEvent`:
 ### 5.4 Popup window
 
 - Frameless, always-on-top, no taskbar entry, no focus steal.
+  **No focus steal means `ViewportBuilder::with_active(false)`.** Without it
+  `egui-winit` defaults to `active: true` and winit shows the window with Win32
+  `SW_SHOW`, which takes the foreground and pulls focus out of whatever the
+  user was typing in; with it, winit uses `SW_SHOWNOACTIVATE`, and the popup
+  still activates on click so Dismiss keeps working. Nothing about this is
+  visible on a developer's machine unless another window happens to be focused
+  when a reminder fires, so it is pinned by a test in `src/popup.rs`.
 - Anchored above the tray icon. Get the icon's screen rect from `tray-icon`. **Fallback if rect is unavailable:** use the bottom-right of the primary monitor's work area as the anchor.
 - Content:
   - Icon (large) — emoji from message, or default 🔔

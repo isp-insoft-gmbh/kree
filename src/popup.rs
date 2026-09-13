@@ -80,13 +80,7 @@ impl PopupHandle {
             self.inner.fired_at.timestamp_nanos_opt().unwrap_or(0)
         ));
 
-        let builder = ViewportBuilder::default()
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_always_on_top()
-            .with_taskbar(false)
-            .with_position(self.position)
-            .with_inner_size([POPUP_WIDTH, POPUP_HEIGHT]);
+        let builder = popup_viewport(self.position);
 
         let popup = Arc::clone(&self.inner);
         ctx.show_viewport_deferred(viewport_id, builder, move |ctx, _class| {
@@ -99,6 +93,31 @@ impl PopupHandle {
 
         true
     }
+}
+
+/// The viewport a popup is shown in.
+///
+/// `with_active(false)` is the load-bearing one, and the easiest to lose in a
+/// refactor because nothing about it is visible on a developer's machine
+/// unless they are typing in another window when a reminder fires.
+///
+/// Without it, `egui-winit` defaults to `active: true`, winit sets its
+/// `MARKER_ACTIVATE` flag, and the window is shown with Win32 `SW_SHOW` —
+/// which takes the foreground and pulls focus out of whatever the user was
+/// working in. With it, winit shows the window with `SW_SHOWNOACTIVATE`
+/// instead: the popup appears on top, does not steal focus, and still
+/// activates normally when clicked, so Dismiss keeps working.
+///
+/// `docs/specs/spec.md` § 5.4 requires this ("no focus steal").
+fn popup_viewport(position: (f32, f32)) -> ViewportBuilder {
+    ViewportBuilder::default()
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_always_on_top()
+        .with_taskbar(false)
+        .with_active(false)
+        .with_position(position)
+        .with_inner_size([POPUP_WIDTH, POPUP_HEIGHT])
 }
 
 fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
@@ -293,6 +312,33 @@ fn fallback_position_from(work: &WorkArea) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reminder must never take focus off what the user is doing.
+    ///
+    /// This cannot assert the Win32 behaviour from here — it pins the flag
+    /// that produces it. The bug this guards against was simply the absence
+    /// of `with_active(false)`, which is invisible in review and invisible
+    /// at runtime unless another window happens to be focused when a
+    /// reminder fires. See `popup_viewport` and `docs/specs/spec.md` § 5.4.
+    #[test]
+    fn popup_viewport_does_not_take_focus() {
+        let builder = popup_viewport((100.0, 200.0));
+        assert_eq!(
+            builder.active,
+            Some(false),
+            "popup must be shown with SW_SHOWNOACTIVATE, not SW_SHOW"
+        );
+    }
+
+    /// The rest of § 5.4's window contract, pinned alongside it: frameless,
+    /// always on top, and absent from the taskbar.
+    #[test]
+    fn popup_viewport_is_frameless_topmost_and_off_the_taskbar() {
+        let builder = popup_viewport((100.0, 200.0));
+        assert_eq!(builder.decorations, Some(false));
+        assert_eq!(builder.taskbar, Some(false));
+        assert_eq!(builder.window_level, Some(egui::WindowLevel::AlwaysOnTop));
+    }
 
     fn fake_handle(top_y: f32) -> PopupHandle {
         let visible = Arc::new(AtomicBool::new(true));
