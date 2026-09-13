@@ -116,7 +116,7 @@ Project repo layout:
 */30 9-17 * * 1-5    | 💧 Drink water
 0 17 * * 1-5         | 🛑 Shutdown ritual
 0 9 * * 1            | 📋 Weekly review
-0 0 * 9-17 * *       | 🧘 Stand and stretch
+0 9-17 * * *         | 🧘 Stand and stretch
 */15 * * * *         | Plain reminder with no emoji
 ```
 
@@ -149,7 +149,9 @@ rescheduling the user's reminders:
 - Sunday is `0`, `7`, and `SUN`.
 - Steps (`*/15`) snap forward to the next multiple; stepped ranges
   (`9-17/4`) walk the range.
-- Six-field expressions are read **seconds-first**, not year-last.
+- Six-field expressions are read **seconds-first**, not year-last. No example
+  here uses that form: the leading seconds field shifts every later field
+  right, which is easy to get wrong by one position and hard to see.
 - Single-number step syntax (`5/5`, `0/15`, `/10`) is accepted. The backend
   rejects it by default from croner 4 on, as non-compliant with
   OCPS/vixie-cron; `src/cron.rs` opts back in via `sloppy_ranges` because

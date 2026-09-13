@@ -146,6 +146,19 @@ mod tests {
                 local(2026, 1, 5, 10, 0),
                 local(2026, 1, 5, 13, 0),
             ),
+            // The `docs/specs/spec.md` § 4 "Stand and stretch" example:
+            // hourly on the hour through the working day, and rolling to the
+            // next morning once the window closes.
+            (
+                "0 9-17 * * *",
+                local(2026, 1, 5, 10, 0),
+                local(2026, 1, 5, 11, 0),
+            ),
+            (
+                "0 9-17 * * *",
+                local(2026, 1, 5, 17, 0),
+                local(2026, 1, 6, 9, 0),
+            ),
             // Yearly, crossing the year boundary.
             (
                 "0 0 1 1 *",
@@ -190,13 +203,17 @@ mod tests {
 
     /// A six-field expression is read seconds-first, not year-last.
     ///
-    /// `docs/specs/spec.md` § 4 lists `0 0 * 9-17 * *` as an example. It is
-    /// six fields, so it parses as sec=0 min=0 hour=* dom=9-17 month=* dow=*
-    /// — hourly on the hour, around the clock, but only on the 9th through
-    /// 17th of the *month*. The `9-17` the author meant as working hours
-    /// landed in the day-of-month field, because the extra leading field
-    /// shifts everything right. Pinned here as the current behavior; see
-    /// docs/specs/open-items.md.
+    /// `docs/specs/spec.md` § 4 used to list `0 0 * 9-17 * *` as an example.
+    /// It is six fields, so it parses as sec=0 min=0 hour=* dom=9-17 month=*
+    /// dow=* — hourly on the hour, around the clock, but only on the 9th
+    /// through 17th of the *month*. The `9-17` the author meant as working
+    /// hours landed in the day-of-month field, because the extra leading
+    /// field shifts everything right. The example is now the five-field
+    /// `0 9-17 * * *` it was reaching for.
+    ///
+    /// The six-field form is still accepted, so this keeps asserting how it
+    /// parses. Getting a field position wrong is the whole hazard, and it is
+    /// invisible without a test: both spellings parse, and both fire.
     #[test]
     fn six_field_expression_is_seconds_first() {
         let expr = "0 0 * 9-17 * *";

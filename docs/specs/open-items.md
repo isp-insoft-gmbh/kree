@@ -5,17 +5,15 @@ Follow-ups not covered by `spec.md` or its build order. Items marked
 landed. Items marked `[ ]` are still open; each carries enough context
 for a future session to pick up.
 
-- [ ] **Fix the `0 0 * 9-17 * *` example in `spec.md` § 4.** It is six
-  fields, so it parses seconds-first: sec=0 min=0 hour=* dom=9-17 month=*
-  dow=*. That fires hourly on the hour — which *is* the intended cadence —
-  but around the clock, and only on the 9th through 17th of the **month**.
-  The `9-17` meant as working hours landed in the day-of-month field,
-  because the extra leading field shifts every other field right. Current
-  behavior is pinned by `cron::tests::six_field_expression_is_seconds_first`,
-  which now walks consecutive occurrences so the hourly cadence and the
-  day-of-month range are both asserted, not just the first fire. The
-  intended line is probably `0 9-17 * * *`. Needs a user decision on what
-  the example should say.
+- [x] **Fix the `0 0 * 9-17 * *` example in `spec.md` § 4.** It was six
+  fields, so it parsed seconds-first: sec=0 min=0 hour=* dom=9-17 month=*
+  dow=*. That fired hourly on the hour — the intended cadence — but around
+  the clock, and only on the 9th through 17th of the **month**, because the
+  `9-17` meant as working hours landed in the day-of-month field. Now reads
+  `0 9-17 * * *`: the minimal correction, moving `9-17` to the hour field
+  and leaving day-of-week as the `*` the author wrote. Both that and the
+  old six-field parse are asserted in `cron::tests`, so the example and the
+  code cannot drift apart again.
 
 - [ ] **Push to the `isp-insoft` GitHub org.** Add a `git remote` for the
   ISP Insoft repo, push `main`, switch CI from "windows-latest scratch"
