@@ -1,7 +1,7 @@
 ## Changes
 
-- No user-facing behavior changes in this prerelease.
+- The main window now shows the app version and a reliable title mark.
 
 ## Fixes
 
-- Removed unused Linux tray and audio codec dependencies from the Windows build to keep release checks clean.
+- Reminder popups no longer steal keyboard focus when they appear.
