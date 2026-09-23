@@ -10,6 +10,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: outdated-dependencies
+  cancel-in-progress: false
+
 # Nothing here builds kree — cargo-outdated resolves Cargo.toml against
 # crates.io — so this does not need a Windows runner, and GitHub-hosted Linux
 # is free for public repositories. It used to compile cargo-outdated from
@@ -18,14 +22,19 @@ jobs:
   outdated:
     name: Check for outdated crates
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
       # Caches ~/.cargo/bin, so cargo-outdated is fetched once rather than
       # reinstalled on every weekly run.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/trunk' }}
       - name: Install cargo-outdated
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2
         with:
           tool: cargo-outdated
       - name: Run cargo-outdated
@@ -33,23 +42,46 @@ jobs:
         shell: bash
         run: |
           set +e
-          OUTPUT=$(cargo outdated -R --exit-code 1)
-          STATUS=$?
-          echo "$OUTPUT"
+          cargo outdated -R --exit-code 42 > outdated-report.txt 2>&1
+          status=$?
+          set -e
+          cat outdated-report.txt
+          case "$status" in
+            0) state=current ;;
+            42) state=outdated ;;
+            *)
+              echo "state=error" >> "$GITHUB_OUTPUT"
+              exit "$status"
+              ;;
+          esac
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+      - name: Summarize outdated dependencies
+        if: always()
+        shell: bash
+        env:
+          STATE: ${{ steps.outdated.outputs.state }}
+        run: |
           {
-            echo "report<<EOF"
-            echo "$OUTPUT"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          # Always succeed; outdated crates aren't a build failure
-          exit 0
+            echo "## Outdated dependencies"
+            echo
+            echo "Status: \`${STATE:-error}\`"
+            if [[ -f outdated-report.txt ]]; then
+              echo
+              echo '```text'
+              head -n 200 outdated-report.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Open or update issue
-        if: steps.outdated.outputs.status != '0'
-        uses: actions/github-script@v9
+        if: steps.outdated.outputs.state == 'outdated'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const report = `${{ steps.outdated.outputs.report }}`;
+            const fs = require("fs");
+            const completeReport = fs.readFileSync("outdated-report.txt", "utf8");
+            const report = completeReport.length > 60000
+              ? `${completeReport.slice(0, 60000)}\n... report truncated ...`
+              : completeReport;
             const title = "Outdated dependencies detected";
             const body = `Weekly \`cargo outdated -R\` report:\n\n\`\`\`\n${report}\n\`\`\`\n`;
             const issues = await github.rest.issues.listForRepo({
