@@ -34,7 +34,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/trunk' }}
       - name: Install cargo-outdated
-        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2
         with:
           tool: cargo-outdated
       - name: Run cargo-outdated
