@@ -128,7 +128,12 @@ fn render(ctx: &egui::Context, popup: &Arc<PopupData>) {
         elapsed.as_secs_f32() / FADE_IN.as_secs_f32()
     };
 
-    egui::Area::new(egui::Id::new("popup-content"))
+    // `Id::unique` is the renamed `Id::new` — egui 0.37 deprecated the latter,
+    // and it already delegated here, so this is the same id. "Unique" means a
+    // root id rather than a salt derived from a parent, which is what
+    // `Area::new` wants; each popup is its own viewport with its own Context,
+    // so the constant source does not collide across popups.
+    egui::Area::new(egui::Id::unique("popup-content"))
         .fixed_pos(frame_pos())
         .show(ctx, |ui| {
             ui.set_min_size(frame_min_size());
