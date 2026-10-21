@@ -207,7 +207,17 @@ Per `ReminderEvent`:
   still activates on click so Dismiss keeps working. Nothing about this is
   visible on a developer's machine unless another window happens to be focused
   when a reminder fires, so it is pinned by a test in `src/popup.rs`.
-- Anchored above the tray icon. Get the icon's screen rect from `tray-icon`. **Fallback if rect is unavailable:** use the bottom-right of the primary monitor's work area as the anchor.
+- Anchored beside the tray icon, on whichever side faces the desktop. Get the
+  icon's screen rect from `tray-icon`. **The taskbar can be docked to any
+  edge**, so the side is derived rather than assumed: the work area is the
+  desktop minus the taskbar and the icon sits inside the taskbar, so the icon
+  falls outside the work area on exactly the edge the taskbar occupies. Bottom
+  → above the icon; top → below it (and popups then stack *downward*, since
+  that is where the room is); left or right → beside it, vertically centred.
+  Every result is clamped into the work area, so a popup cannot leave the
+  screen. **Fallback if the rect is unavailable, or if the icon overlaps the
+  work area so no edge can be inferred** (an auto-hiding taskbar does this):
+  the bottom-right of the primary monitor's work area.
 - Content:
   - Icon (large) — emoji from message, or default 🔔
   - Body text
