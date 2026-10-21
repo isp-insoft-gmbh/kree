@@ -226,7 +226,7 @@ pub fn compute_position(
     tray_icon: Option<ScreenRect>,
     position: PopupPosition,
 ) -> (f32, f32) {
-    let (base, stack_up) = match position {
+    let (work, base, stack_up, margin) = match position {
         PopupPosition::Tray => match tray_icon {
             // The work area must come from the monitor the tray icon is
             // actually on. `SPI_GETWORKAREA` only ever reports the primary
@@ -235,18 +235,47 @@ pub fn compute_position(
             // screen entirely when the taskbar is on a secondary monitor.
             Some(icon) => {
                 let work = work_area_for_icon(&icon);
-                tray_placement(&icon, &work)
+                let (base, stack_up) = tray_placement(&icon, &work);
+                (work, base, stack_up, TRAY_GAP)
             }
-            None => (fallback_position_from(&primary_work_area()), true),
+            None => {
+                let work = primary_work_area();
+                let base = fallback_position_from(&work);
+                (work, base, true, TRAY_GAP)
+            }
         },
         // The fixed positions name a place on the user's screen, so they
         // stay on the primary monitor as before.
-        other => (
-            anchor_from_work_area(&primary_work_area(), other),
-            stack_up_for(other),
-        ),
+        other => {
+            let work = primary_work_area();
+            let base = anchor_from_work_area(&work, other);
+            (work, base, stack_up_for(other), EDGE_GAP)
+        }
     };
 
+    stacked_position(base, existing, stack_up, &work, margin)
+}
+
+/// Where the next popup goes given the ones already on screen.
+///
+/// Kept separate from `compute_position` so it can be tested without Win32:
+/// the work area arrives as an argument rather than from `SPI_GETWORKAREA`.
+///
+/// Stacking is unbounded on its own — every popup steps a further
+/// `POPUP_HEIGHT + STACK_GAP` from the anchor, so a burst of reminders walks
+/// them off the screen (the eighth, on a 1080 px monitor). Clamping stops
+/// that, at a real cost: past the limit popups pile up at the edge and
+/// overlap instead of disappearing, so stacking stops conveying order once it
+/// saturates. On screen and dismissible beats invisible. Bounding how many
+/// can be live at once would be the fuller fix and is a product decision
+/// `docs/specs/spec.md` § 5.4 does not currently make.
+fn stacked_position(
+    base: (f32, f32),
+    existing: &[PopupHandle],
+    stack_up: bool,
+    work: &WorkArea,
+    margin: f32,
+) -> (f32, f32) {
     if existing.is_empty() {
         return base;
     }
@@ -264,7 +293,8 @@ pub fn compute_position(
             .fold(f32::NEG_INFINITY, f32::max);
         bottommost + POPUP_HEIGHT + STACK_GAP
     };
-    (base.0, next_y)
+
+    clamp_into(work, (base.0, next_y), margin)
 }
 
 /// Which screen edge the taskbar is docked to, inferred from geometry.
@@ -592,17 +622,6 @@ mod tests {
         }
     }
 
-    fn bottom_taskbar_icon() -> ScreenRect {
-        // Matches the pre-existing expectations: centre x 1000, and a work
-        // area bottom of 1040 once Win32 excludes the taskbar.
-        ScreenRect {
-            left: 984.0,
-            top: 1044.0,
-            right: 1016.0,
-            bottom: 1076.0,
-        }
-    }
-
     #[test]
     fn taskbar_edge_is_inferred_for_every_docking_position() {
         for edge in [
@@ -708,20 +727,33 @@ mod tests {
         assert!(pos.0.is_finite() && pos.1.is_finite(), "{pos:?}");
     }
 
+    /// A 1920x1040 work area (taskbar at the bottom), so the stacking tests
+    /// do not depend on whatever the host reports through Win32.
+    fn fake_work() -> WorkArea {
+        WorkArea {
+            left: 0.0,
+            top: 0.0,
+            right: 1920.0,
+            bottom: 1040.0,
+        }
+    }
+
+    fn stack_next(existing: &[PopupHandle], base_y: f32, stack_up: bool) -> (f32, f32) {
+        stacked_position((840.0, base_y), existing, stack_up, &fake_work(), TRAY_GAP)
+    }
+
     #[test]
     fn tray_second_popup_stacks_above_first() {
         let popups = vec![fake_handle(900.0)];
-        let pos = compute_position(&popups, Some(bottom_taskbar_icon()), PopupPosition::Tray);
         // y: 900 - 132 - 8 = 760
-        assert!((pos.1 - 760.0).abs() < 0.1);
+        assert!((stack_next(&popups, 900.0, true).1 - 760.0).abs() < 0.1);
     }
 
     #[test]
     fn tray_third_popup_stacks_above_topmost_existing() {
         let popups = vec![fake_handle(900.0), fake_handle(760.0)];
-        let pos = compute_position(&popups, Some(bottom_taskbar_icon()), PopupPosition::Tray);
         // y: 760 - 132 - 8 = 620
-        assert!((pos.1 - 620.0).abs() < 0.1);
+        assert!((stack_next(&popups, 900.0, true).1 - 620.0).abs() < 0.1);
     }
 
     #[test]
@@ -730,9 +762,45 @@ mod tests {
         // should still go above the topmost remaining (y=620), not
         // refill the gap.
         let popups = vec![fake_handle(900.0), fake_handle(620.0)];
-        let pos = compute_position(&popups, Some(bottom_taskbar_icon()), PopupPosition::Tray);
         // y: 620 - 132 - 8 = 480
-        assert!((pos.1 - 480.0).abs() < 0.1);
+        assert!((stack_next(&popups, 900.0, true).1 - 480.0).abs() < 0.1);
+    }
+
+    /// Stacking must not walk popups off the screen.
+    ///
+    /// Downward from y=48 the eighth popup would start at 1028 and end at
+    /// 1160, past a 1040 work-area bottom. It is pinned to the last row that
+    /// fits instead. Popups overlap there — see `stacked_position`.
+    #[test]
+    fn stacking_is_clamped_to_the_work_area() {
+        let mut handles: Vec<PopupHandle> = Vec::new();
+        let mut last = 48.0;
+        for _ in 0..12 {
+            let pos = stacked_position((840.0, 48.0), &handles, false, &fake_work(), TRAY_GAP);
+            last = pos.1;
+            assert!(
+                last + POPUP_HEIGHT <= fake_work().bottom,
+                "popup ran off the bottom at y={last}"
+            );
+            handles.push(fake_handle(last));
+        }
+        // Saturated at the last fitting row: 1040 - 132 - 8 = 900.
+        assert!((last - 900.0).abs() < 0.1, "{last}");
+    }
+
+    /// The mirror case: stacking upward must not leave the top.
+    #[test]
+    fn upward_stacking_is_clamped_to_the_work_area() {
+        let mut handles: Vec<PopupHandle> = Vec::new();
+        for _ in 0..12 {
+            let pos = stacked_position((840.0, 900.0), &handles, true, &fake_work(), TRAY_GAP);
+            assert!(
+                pos.1 >= fake_work().top,
+                "popup left the top at y={}",
+                pos.1
+            );
+            handles.push(fake_handle(pos.1));
+        }
     }
 
     fn anchor_for_test(position: PopupPosition) -> (f32, f32) {
@@ -782,7 +850,7 @@ mod tests {
         // top_left first popup at (16, 16); second should land at
         // y = 16 + 132 + 8 = 156.
         let first = fake_handle(16.0);
-        let pos = compute_position(&[first], None, PopupPosition::TopLeft);
+        let pos = stacked_position((16.0, 16.0), &[first], false, &fake_work(), EDGE_GAP);
         assert!((pos.1 - 156.0).abs() < 1.0, "{pos:?}");
     }
 
@@ -791,7 +859,7 @@ mod tests {
         // bottom_right first popup with top = 892; second at
         // y = 892 - 132 - 8 = 752.
         let first = fake_handle(892.0);
-        let pos = compute_position(&[first], None, PopupPosition::BottomRight);
+        let pos = stacked_position((1584.0, 892.0), &[first], true, &fake_work(), EDGE_GAP);
         assert!((pos.1 - 752.0).abs() < 1.0, "{pos:?}");
     }
 }
