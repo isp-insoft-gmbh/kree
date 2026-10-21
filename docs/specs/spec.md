@@ -215,7 +215,13 @@ Per `ReminderEvent`:
   → above the icon; top → below it (and popups then stack *downward*, since
   that is where the room is); left or right → beside it, vertically centred.
   Every result is clamped into the work area, so a popup cannot leave the
-  screen. **Fallback if the rect is unavailable, or if the icon overlaps the
+  screen. **The work area is the one belonging to the monitor the tray icon
+  is on**, resolved with `MonitorFromRect` + `GetMonitorInfoW`:
+  `SPI_GETWORKAREA` only ever reports the primary monitor's, and the icon rect
+  is in virtual-screen coordinates, so mixing the two puts the popup on the
+  wrong screen when the taskbar lives on a secondary monitor. The fixed
+  positions below name a place on the user's screen and stay on the primary
+  monitor. **Fallback if the rect is unavailable, or if the icon overlaps the
   work area so no edge can be inferred** (an auto-hiding taskbar does this):
   the bottom-right of the primary monitor's work area.
 - Content:

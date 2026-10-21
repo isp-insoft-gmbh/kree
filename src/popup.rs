@@ -5,6 +5,9 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local};
 use eframe::egui::{self, ViewportBuilder, ViewportCommand, ViewportId};
 use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
@@ -223,14 +226,23 @@ pub fn compute_position(
     tray_icon: Option<ScreenRect>,
     position: PopupPosition,
 ) -> (f32, f32) {
-    let work_area = work_area();
     let (base, stack_up) = match position {
         PopupPosition::Tray => match tray_icon {
-            Some(icon) => tray_placement(&icon, &work_area),
-            None => (fallback_position_from(&work_area), true),
+            // The work area must come from the monitor the tray icon is
+            // actually on. `SPI_GETWORKAREA` only ever reports the primary
+            // monitor's, while the icon rect is in virtual-screen
+            // coordinates — mixing the two puts the popup on the wrong
+            // screen entirely when the taskbar is on a secondary monitor.
+            Some(icon) => {
+                let work = work_area_for_icon(&icon);
+                tray_placement(&icon, &work)
+            }
+            None => (fallback_position_from(&primary_work_area()), true),
         },
+        // The fixed positions name a place on the user's screen, so they
+        // stay on the primary monitor as before.
         other => (
-            anchor_from_work_area(&work_area, other),
+            anchor_from_work_area(&primary_work_area(), other),
             stack_up_for(other),
         ),
     };
@@ -385,7 +397,38 @@ struct WorkArea {
     bottom: f32,
 }
 
-fn work_area() -> WorkArea {
+/// Work area of the monitor the tray icon sits on.
+///
+/// Falls back to the primary monitor's when the lookup fails, which is no
+/// worse than what this did before the monitor was consulted at all.
+fn work_area_for_icon(icon: &ScreenRect) -> WorkArea {
+    let rect = RECT {
+        left: icon.left as i32,
+        top: icon.top as i32,
+        right: icon.right as i32,
+        bottom: icon.bottom as i32,
+    };
+    let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_invalid() {
+        return primary_work_area();
+    }
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe { GetMonitorInfoW(monitor, &mut info) };
+    if !ok.as_bool() {
+        return primary_work_area();
+    }
+    WorkArea {
+        left: info.rcWork.left as f32,
+        top: info.rcWork.top as f32,
+        right: info.rcWork.right as f32,
+        bottom: info.rcWork.bottom as f32,
+    }
+}
+
+fn primary_work_area() -> WorkArea {
     let mut rect = RECT::default();
     let ok = unsafe {
         SystemParametersInfoW(
