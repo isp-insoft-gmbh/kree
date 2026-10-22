@@ -650,54 +650,15 @@ impl App {
         }
     }
 
-    fn request_shutdown(&mut self, ctx: &egui::Context) {
-        if self.shutting_down {
-            return;
-        }
-        self.shutting_down = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        ctx.request_repaint();
-    }
-}
-
-fn apply_patch_local(config: &mut config::Config, patch: config::ConfigPatch) {
-    match patch {
-        config::ConfigPatch::Chime(v) => config.chime = v,
-        config::ConfigPatch::Speak(v) => config.speak = v,
-        config::ConfigPatch::PopupPosition(p) => config.popup_position = p,
-        config::ConfigPatch::Theme(t) => config.theme = t,
-    }
-}
-
-impl eframe::App for App {
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        // eframe's default clear_color reads `visuals` *as-passed* — in
-        // practice that's egui's stock dark/light defaults from before
-        // our `theme::apply` ran. Pin the swap-chain clear directly to
-        // our nugu palettes so a hidden-then-shown light viewport
-        // doesn't briefly flash dark.
-        let bg = match self.effective_theme() {
-            ThemeMode::Dark => egui::Color32::from_rgb(0x24, 0x24, 0x24),
-            ThemeMode::Light => egui::Color32::from_rgb(0xdb, 0xdb, 0xdb),
-        };
-        egui::Rgba::from(bg).to_array()
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        let mut mode = self.effective_theme();
-        self.apply_theme_if_needed(&ctx, mode);
-
-        if ctx.input(|i| i.viewport().close_requested()) {
-            // Window-X always means "hide to tray". Real exit goes
-            // through explicit shutdown paths such as tray Quit or Ctrl+C.
-            if !self.shutting_down {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                self.main_visible = false;
-            }
-        }
-
+    /// Drain every channel that feeds the UI, and act on what arrives.
+    ///
+    /// This runs from [`eframe::App::logic`] rather than `App::ui` because
+    /// eframe runs no egui pass at all while the root viewport is hidden —
+    /// which, for a tray app, is almost always. Draining here used to happen
+    /// in `ui`, so a reminder that fired while the window was hidden sat in
+    /// the channel until a tray click brought the loop back to life; by then
+    /// it had often gone stale and was dropped unseen.
+    fn drain_channels(&mut self, ctx: &egui::Context) {
         // Drain UI messages from the tokio side.
         while let Ok(msg) = self.ui_rx.try_recv() {
             match msg {
@@ -712,7 +673,7 @@ impl eframe::App for App {
                         continue;
                     }
                     let anchor = self.tray.rect_anchor();
-                    mode = self.effective_theme();
+                    let mode = self.effective_theme();
                     let position =
                         popup::compute_position(&self.popups, anchor, self.config.popup_position);
                     info!(
@@ -736,20 +697,20 @@ impl eframe::App for App {
                     );
                     self.reminders = reminders;
                     self.config = config;
-                    mode = self.effective_theme();
-                    self.apply_theme_if_needed(&ctx, mode);
+                    let mode = self.effective_theme();
+                    self.apply_theme_if_needed(ctx, mode);
                 }
                 UiMessage::LastFired { schedule, at } => {
                     self.last_fired.insert(schedule, at);
                 }
                 UiMessage::Shutdown => {
-                    self.request_shutdown(&ctx);
+                    self.request_shutdown(ctx);
                 }
                 UiMessage::SystemThemeChanged(is_light) => {
                     info!(is_light, "system theme changed");
                     self.system_is_light = is_light;
-                    mode = self.effective_theme();
-                    self.apply_theme_if_needed(&ctx, mode);
+                    let mode = self.effective_theme();
+                    self.apply_theme_if_needed(ctx, mode);
                 }
             }
         }
@@ -795,6 +756,78 @@ impl eframe::App for App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 ctx.request_repaint();
+            }
+        }
+    }
+
+    fn request_shutdown(&mut self, ctx: &egui::Context) {
+        if self.shutting_down {
+            return;
+        }
+        self.shutting_down = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.request_repaint();
+    }
+}
+
+fn apply_patch_local(config: &mut config::Config, patch: config::ConfigPatch) {
+    match patch {
+        config::ConfigPatch::Chime(v) => config.chime = v,
+        config::ConfigPatch::Speak(v) => config.speak = v,
+        config::ConfigPatch::PopupPosition(p) => config.popup_position = p,
+        config::ConfigPatch::Theme(t) => config.theme = t,
+    }
+}
+
+impl eframe::App for App {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // eframe's default clear_color reads `visuals` *as-passed* — in
+        // practice that's egui's stock dark/light defaults from before
+        // our `theme::apply` ran. Pin the swap-chain clear directly to
+        // our nugu palettes so a hidden-then-shown light viewport
+        // doesn't briefly flash dark.
+        let bg = match self.effective_theme() {
+            ThemeMode::Dark => egui::Color32::from_rgb(0x24, 0x24, 0x24),
+            ThemeMode::Light => egui::Color32::from_rgb(0xdb, 0xdb, 0xdb),
+        };
+        egui::Rgba::from(bg).to_array()
+    }
+
+    /// Runs every pass, visible or not.
+    ///
+    /// eframe only runs an egui pass — and so only calls [`eframe::App::ui`] —
+    /// when the root viewport is visible or one of its child viewports is.
+    /// A tray app spends nearly all its life hidden with no popup open, which
+    /// is exactly the state where neither holds, so anything driven from `ui`
+    /// stops happening: reminders queued up unseen until a tray click woke the
+    /// loop, and ones that had aged past the staleness cutoff by then were
+    /// dropped without ever being shown.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain_channels(ctx);
+
+        // A popup is a deferred child viewport, so it can only be created from
+        // inside an egui pass — but the pass is precisely what a hidden root
+        // viewport does not get, and the popup that would unblock it does not
+        // exist yet. `RequestPaintWhileHidden` breaks that cycle: it makes
+        // eframe treat this one pass as visible, so `ui` runs and spawns the
+        // viewport. Once the popup is up it keeps the passes coming on its own.
+        if !self.popups.is_empty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let mode = self.effective_theme();
+        self.apply_theme_if_needed(&ctx, mode);
+
+        if ctx.input(|i| i.viewport().close_requested()) {
+            // Window-X always means "hide to tray". Real exit goes
+            // through explicit shutdown paths such as tray Quit or Ctrl+C.
+            if !self.shutting_down {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.main_visible = false;
             }
         }
 
