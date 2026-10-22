@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+
+use crate::popup::ScreenRect;
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuId, MenuItem},
@@ -65,14 +67,22 @@ pub fn build() -> Result<Tray> {
 }
 
 impl Tray {
-    /// Top-center of the tray icon's screen rect, in physical pixels, if
-    /// known. The popup is anchored so its bottom edge sits just above
-    /// this point.
-    pub fn rect_anchor(&self) -> Option<(f32, f32)> {
+    /// The tray icon's screen rect in physical pixels, if the platform
+    /// reports one.
+    ///
+    /// All four edges are kept, not just the top-centre point: which side of
+    /// the icon the popup belongs on depends on where the icon sits relative
+    /// to the desktop work area, which is how `popup::compute_position`
+    /// works out where the taskbar is docked.
+    pub fn icon_rect(&self) -> Option<ScreenRect> {
         let r = self.icon.rect()?;
-        let cx = r.position.x as f32 + r.size.width as f32 / 2.0;
-        let top = r.position.y as f32;
-        Some((cx, top))
+        let (x, y) = (r.position.x as f32, r.position.y as f32);
+        Some(ScreenRect {
+            left: x,
+            top: y,
+            right: x + r.size.width as f32,
+            bottom: y + r.size.height as f32,
+        })
     }
 
     /// Swap to the active or paused icon variant. The crate's

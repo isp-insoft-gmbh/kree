@@ -5,13 +5,41 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local};
 use eframe::egui::{self, ViewportBuilder, ViewportCommand, ViewportId};
 use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
 
+use tracing::{info, warn};
+
 use crate::UiFire;
 use crate::config::PopupPosition;
 use crate::theme::ThemeMode;
+
+/// A screen rectangle in physical pixels.
+///
+/// Used for the tray icon's bounds. `tray-icon` reports position and size;
+/// we keep all four edges because which *side* of the icon the popup goes on
+/// depends on where the icon sits relative to the desktop work area.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenRect {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl ScreenRect {
+    fn center_x(&self) -> f32 {
+        (self.left + self.right) / 2.0
+    }
+
+    fn center_y(&self) -> f32 {
+        (self.top + self.bottom) / 2.0
+    }
+}
 
 pub const POPUP_WIDTH: f32 = 320.0;
 pub const POPUP_HEIGHT: f32 = 132.0;
@@ -197,25 +225,75 @@ fn frame_body_min_size() -> egui::Vec2 {
 /// stacks upward). 8 px gap between stacked popups.
 pub fn compute_position(
     existing: &[PopupHandle],
-    tray_anchor: Option<(f32, f32)>,
+    tray_icon: Option<ScreenRect>,
     position: PopupPosition,
 ) -> (f32, f32) {
-    let work_area = work_area();
-    let (base, stack_up) = match position {
-        PopupPosition::Tray => {
-            // Existing behavior: anchored above the tray, screen-corner fallback.
-            let anchor_pos = match tray_anchor {
-                Some((cx, top)) => (cx - POPUP_WIDTH / 2.0, top - POPUP_HEIGHT - TRAY_GAP),
-                None => fallback_position_from(&work_area),
-            };
-            (anchor_pos, true)
+    let (work, base, stack_up, margin) = match position {
+        PopupPosition::Tray => match tray_icon {
+            // The work area must come from the monitor the tray icon is
+            // actually on. `SPI_GETWORKAREA` only ever reports the primary
+            // monitor's, while the icon rect is in virtual-screen
+            // coordinates — mixing the two puts the popup on the wrong
+            // screen entirely when the taskbar is on a secondary monitor.
+            Some(icon) => {
+                let work = work_area_for_icon(&icon);
+                let (base, stack_up) = tray_placement(&icon, &work);
+                // The placement is derived entirely from these two rects, so
+                // when a popup lands somewhere wrong they are the only things
+                // worth seeing. Both come from Win32 and neither is visible
+                // on a developer's machine without the taskbar moved.
+                info!(
+                    icon = ?icon,
+                    work = ?work,
+                    edge = ?taskbar_edge(&icon, &work),
+                    base = ?base,
+                    "tray popup placement"
+                );
+                (work, base, stack_up, TRAY_GAP)
+            }
+            None => {
+                let work = primary_work_area();
+                let base = fallback_position_from(&work);
+                warn!(
+                    work = ?work,
+                    base = ?base,
+                    "tray icon reported no rect; using bottom-right fallback"
+                );
+                (work, base, true, TRAY_GAP)
+            }
+        },
+        // The fixed positions name a place on the user's screen, so they
+        // stay on the primary monitor as before.
+        other => {
+            let work = primary_work_area();
+            let base = anchor_from_work_area(&work, other);
+            (work, base, stack_up_for(other), EDGE_GAP)
         }
-        other => (
-            anchor_from_work_area(&work_area, other),
-            stack_up_for(other),
-        ),
     };
 
+    stacked_position(base, existing, stack_up, &work, margin)
+}
+
+/// Where the next popup goes given the ones already on screen.
+///
+/// Kept separate from `compute_position` so it can be tested without Win32:
+/// the work area arrives as an argument rather than from `SPI_GETWORKAREA`.
+///
+/// Stacking is unbounded on its own — every popup steps a further
+/// `POPUP_HEIGHT + STACK_GAP` from the anchor, so a burst of reminders walks
+/// them off the screen (the eighth, on a 1080 px monitor). Clamping stops
+/// that, at a real cost: past the limit popups pile up at the edge and
+/// overlap instead of disappearing, so stacking stops conveying order once it
+/// saturates. On screen and dismissible beats invisible. Bounding how many
+/// can be live at once would be the fuller fix and is a product decision
+/// `docs/specs/spec.md` § 5.4 does not currently make.
+fn stacked_position(
+    base: (f32, f32),
+    existing: &[PopupHandle],
+    stack_up: bool,
+    work: &WorkArea,
+    margin: f32,
+) -> (f32, f32) {
     if existing.is_empty() {
         return base;
     }
@@ -233,7 +311,95 @@ pub fn compute_position(
             .fold(f32::NEG_INFINITY, f32::max);
         bottommost + POPUP_HEIGHT + STACK_GAP
     };
-    (base.0, next_y)
+
+    clamp_into(work, (base.0, next_y), margin)
+}
+
+/// Which screen edge the taskbar is docked to, inferred from geometry.
+///
+/// The work area is the desktop minus the taskbar, and the tray icon lives
+/// *inside* the taskbar — so the icon falls outside the work area on exactly
+/// the edge the taskbar occupies. That identifies all four positions without
+/// asking Win32 which one it is, and degrades to `Unknown` rather than
+/// guessing when the two overlap (an auto-hiding taskbar leaves the work area
+/// covering the whole screen).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskbarEdge {
+    Bottom,
+    Top,
+    Left,
+    Right,
+    Unknown,
+}
+
+fn taskbar_edge(icon: &ScreenRect, work: &WorkArea) -> TaskbarEdge {
+    if icon.top >= work.bottom {
+        TaskbarEdge::Bottom
+    } else if icon.bottom <= work.top {
+        TaskbarEdge::Top
+    } else if icon.right <= work.left {
+        TaskbarEdge::Left
+    } else if icon.left >= work.right {
+        TaskbarEdge::Right
+    } else {
+        TaskbarEdge::Unknown
+    }
+}
+
+/// Where a tray-anchored popup goes, and which way further popups stack.
+///
+/// The popup sits beside the tray icon on whichever side faces the work
+/// area, aligned to the icon along the taskbar's own axis. Placing it
+/// unconditionally *above* the icon — which is what this did before — is
+/// only correct for a bottom taskbar: with the taskbar on the left, the
+/// icon's centre x is a few dozen pixels, so centring a 320 px popup on it
+/// put more than half of it off the left edge of the screen.
+///
+/// Every result is clamped into the work area, so a popup cannot leave the
+/// screen even if the icon rect is reported somewhere unexpected.
+fn tray_placement(icon: &ScreenRect, work: &WorkArea) -> ((f32, f32), bool) {
+    let (raw, stack_up) = match taskbar_edge(icon, work) {
+        // Above the icon, stacking up into the desktop.
+        TaskbarEdge::Bottom => (
+            (
+                icon.center_x() - POPUP_WIDTH / 2.0,
+                work.bottom - POPUP_HEIGHT - TRAY_GAP,
+            ),
+            true,
+        ),
+        // Below the icon. The room is downward, so stack that way.
+        TaskbarEdge::Top => (
+            (icon.center_x() - POPUP_WIDTH / 2.0, work.top + TRAY_GAP),
+            false,
+        ),
+        // Beside the icon, vertically centred on it.
+        TaskbarEdge::Left => (
+            (work.left + TRAY_GAP, icon.center_y() - POPUP_HEIGHT / 2.0),
+            true,
+        ),
+        TaskbarEdge::Right => (
+            (
+                work.right - POPUP_WIDTH - TRAY_GAP,
+                icon.center_y() - POPUP_HEIGHT / 2.0,
+            ),
+            true,
+        ),
+        TaskbarEdge::Unknown => (fallback_position_from(work), true),
+    };
+    (clamp_into(work, raw, TRAY_GAP), stack_up)
+}
+
+/// Keep a position inside the work area, leaving `margin` at each edge.
+///
+/// The `max` guards the degenerate case where the work area is narrower or
+/// shorter than the popup: without it `clamp` would be called with min > max
+/// and panic.
+fn clamp_into(work: &WorkArea, (x, y): (f32, f32), margin: f32) -> (f32, f32) {
+    let min_x = work.left + margin;
+    let min_y = work.top + margin;
+    let max_x = (work.right - POPUP_WIDTH - margin).max(min_x);
+    let max_y = (work.bottom - POPUP_HEIGHT - margin).max(min_y);
+    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
 
 fn stack_up_for(position: PopupPosition) -> bool {
@@ -279,7 +445,38 @@ struct WorkArea {
     bottom: f32,
 }
 
-fn work_area() -> WorkArea {
+/// Work area of the monitor the tray icon sits on.
+///
+/// Falls back to the primary monitor's when the lookup fails, which is no
+/// worse than what this did before the monitor was consulted at all.
+fn work_area_for_icon(icon: &ScreenRect) -> WorkArea {
+    let rect = RECT {
+        left: icon.left as i32,
+        top: icon.top as i32,
+        right: icon.right as i32,
+        bottom: icon.bottom as i32,
+    };
+    let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_invalid() {
+        return primary_work_area();
+    }
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe { GetMonitorInfoW(monitor, &mut info) };
+    if !ok.as_bool() {
+        return primary_work_area();
+    }
+    WorkArea {
+        left: info.rcWork.left as f32,
+        top: info.rcWork.top as f32,
+        right: info.rcWork.right as f32,
+        bottom: info.rcWork.bottom as f32,
+    }
+}
+
+fn primary_work_area() -> WorkArea {
     let mut rect = RECT::default();
     let ok = unsafe {
         SystemParametersInfoW(
@@ -363,30 +560,218 @@ mod tests {
         assert_eq!(frame_body_min_size(), egui::vec2(294.0, 110.0));
     }
 
+    /// A 1920x1080 screen with the taskbar on the given edge, and the tray
+    /// icon sitting inside that taskbar. `work` excludes the taskbar, which
+    /// is what Win32 reports and what the placement logic reads.
+    fn screen_with_taskbar(edge: TaskbarEdge) -> (ScreenRect, WorkArea) {
+        match edge {
+            TaskbarEdge::Bottom => (
+                ScreenRect {
+                    left: 984.0,
+                    top: 1044.0,
+                    right: 1016.0,
+                    bottom: 1076.0,
+                },
+                WorkArea {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 1920.0,
+                    bottom: 1040.0,
+                },
+            ),
+            TaskbarEdge::Top => (
+                ScreenRect {
+                    left: 984.0,
+                    top: 4.0,
+                    right: 1016.0,
+                    bottom: 36.0,
+                },
+                WorkArea {
+                    left: 0.0,
+                    top: 40.0,
+                    right: 1920.0,
+                    bottom: 1080.0,
+                },
+            ),
+            TaskbarEdge::Left => (
+                ScreenRect {
+                    left: 20.0,
+                    top: 500.0,
+                    right: 52.0,
+                    bottom: 532.0,
+                },
+                WorkArea {
+                    left: 72.0,
+                    top: 0.0,
+                    right: 1920.0,
+                    bottom: 1080.0,
+                },
+            ),
+            TaskbarEdge::Right => (
+                ScreenRect {
+                    left: 1868.0,
+                    top: 500.0,
+                    right: 1900.0,
+                    bottom: 532.0,
+                },
+                WorkArea {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 1848.0,
+                    bottom: 1080.0,
+                },
+            ),
+            TaskbarEdge::Unknown => (
+                // Auto-hidden taskbar: the work area covers the whole screen,
+                // so the icon rect overlaps it and no edge can be inferred.
+                ScreenRect {
+                    left: 984.0,
+                    top: 1044.0,
+                    right: 1016.0,
+                    bottom: 1076.0,
+                },
+                WorkArea {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 1920.0,
+                    bottom: 1080.0,
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn taskbar_edge_is_inferred_for_every_docking_position() {
+        for edge in [
+            TaskbarEdge::Bottom,
+            TaskbarEdge::Top,
+            TaskbarEdge::Left,
+            TaskbarEdge::Right,
+        ] {
+            let (icon, work) = screen_with_taskbar(edge);
+            assert_eq!(taskbar_edge(&icon, &work), edge, "{edge:?}");
+        }
+        let (icon, work) = screen_with_taskbar(TaskbarEdge::Unknown);
+        assert_eq!(taskbar_edge(&icon, &work), TaskbarEdge::Unknown);
+    }
+
     #[test]
     fn tray_first_popup_sits_above_anchor() {
-        let popups: Vec<PopupHandle> = Vec::new();
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
-        // x: cx - W/2 = 1000 - 160 = 840
-        // y: top - H - TRAY_GAP = 1040 - 132 - 8 = 900
-        assert!((pos.0 - 840.0).abs() < 0.1);
-        assert!((pos.1 - 900.0).abs() < 0.1);
+        // Bottom taskbar — unchanged behaviour.
+        // x: centre 1000 - W/2 = 840
+        // y: work.bottom - H - TRAY_GAP = 1040 - 132 - 8 = 900
+        let (icon, work) = screen_with_taskbar(TaskbarEdge::Bottom);
+        let (pos, stack_up) = tray_placement(&icon, &work);
+        assert!((pos.0 - 840.0).abs() < 0.1, "{pos:?}");
+        assert!((pos.1 - 900.0).abs() < 0.1, "{pos:?}");
+        assert!(stack_up);
+    }
+
+    /// The reported bug: with the taskbar on the left, centring the popup on
+    /// the icon's x put it mostly off the left edge of the screen.
+    #[test]
+    fn left_taskbar_puts_the_popup_beside_it_not_off_screen() {
+        let (icon, work) = screen_with_taskbar(TaskbarEdge::Left);
+        let (pos, _) = tray_placement(&icon, &work);
+        // Beside the taskbar: work.left + TRAY_GAP = 72 + 8 = 80.
+        assert!((pos.0 - 80.0).abs() < 0.1, "{pos:?}");
+        // Vertically centred on the icon: 516 - 66 = 450.
+        assert!((pos.1 - 450.0).abs() < 0.1, "{pos:?}");
+        // The old code produced 20 + 16 - 160 = negative x.
+        assert!(
+            pos.0 > 0.0,
+            "popup must not hang off the left edge: {pos:?}"
+        );
+    }
+
+    #[test]
+    fn right_taskbar_puts_the_popup_beside_it() {
+        let (icon, work) = screen_with_taskbar(TaskbarEdge::Right);
+        let (pos, _) = tray_placement(&icon, &work);
+        // work.right - W - TRAY_GAP = 1848 - 320 - 8 = 1520
+        assert!((pos.0 - 1520.0).abs() < 0.1, "{pos:?}");
+        assert!((pos.1 - 450.0).abs() < 0.1, "{pos:?}");
+    }
+
+    #[test]
+    fn top_taskbar_puts_the_popup_below_it_and_stacks_downward() {
+        let (icon, work) = screen_with_taskbar(TaskbarEdge::Top);
+        let (pos, stack_up) = tray_placement(&icon, &work);
+        assert!((pos.0 - 840.0).abs() < 0.1, "{pos:?}");
+        // work.top + TRAY_GAP = 40 + 8 = 48
+        assert!((pos.1 - 48.0).abs() < 0.1, "{pos:?}");
+        // Anchored at the top, so the only room is downward.
+        assert!(!stack_up, "a top taskbar must stack popups downward");
+    }
+
+    /// Whatever the taskbar does, the popup stays on the desktop.
+    #[test]
+    fn every_taskbar_edge_keeps_the_popup_inside_the_work_area() {
+        for edge in [
+            TaskbarEdge::Bottom,
+            TaskbarEdge::Top,
+            TaskbarEdge::Left,
+            TaskbarEdge::Right,
+            TaskbarEdge::Unknown,
+        ] {
+            let (icon, work) = screen_with_taskbar(edge);
+            let (pos, _) = tray_placement(&icon, &work);
+            assert!(pos.0 >= work.left, "{edge:?} left: {pos:?}");
+            assert!(pos.1 >= work.top, "{edge:?} top: {pos:?}");
+            assert!(pos.0 + POPUP_WIDTH <= work.right, "{edge:?} right: {pos:?}");
+            assert!(
+                pos.1 + POPUP_HEIGHT <= work.bottom,
+                "{edge:?} bottom: {pos:?}"
+            );
+        }
+    }
+
+    /// A work area smaller than the popup must clamp rather than panic.
+    #[test]
+    fn absurdly_small_work_area_does_not_panic() {
+        let work = WorkArea {
+            left: 0.0,
+            top: 0.0,
+            right: 100.0,
+            bottom: 50.0,
+        };
+        let icon = ScreenRect {
+            left: 40.0,
+            top: 60.0,
+            right: 60.0,
+            bottom: 80.0,
+        };
+        let (pos, _) = tray_placement(&icon, &work);
+        assert!(pos.0.is_finite() && pos.1.is_finite(), "{pos:?}");
+    }
+
+    /// A 1920x1040 work area (taskbar at the bottom), so the stacking tests
+    /// do not depend on whatever the host reports through Win32.
+    fn fake_work() -> WorkArea {
+        WorkArea {
+            left: 0.0,
+            top: 0.0,
+            right: 1920.0,
+            bottom: 1040.0,
+        }
+    }
+
+    fn stack_next(existing: &[PopupHandle], base_y: f32, stack_up: bool) -> (f32, f32) {
+        stacked_position((840.0, base_y), existing, stack_up, &fake_work(), TRAY_GAP)
     }
 
     #[test]
     fn tray_second_popup_stacks_above_first() {
         let popups = vec![fake_handle(900.0)];
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // y: 900 - 132 - 8 = 760
-        assert!((pos.1 - 760.0).abs() < 0.1);
+        assert!((stack_next(&popups, 900.0, true).1 - 760.0).abs() < 0.1);
     }
 
     #[test]
     fn tray_third_popup_stacks_above_topmost_existing() {
         let popups = vec![fake_handle(900.0), fake_handle(760.0)];
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // y: 760 - 132 - 8 = 620
-        assert!((pos.1 - 620.0).abs() < 0.1);
+        assert!((stack_next(&popups, 900.0, true).1 - 620.0).abs() < 0.1);
     }
 
     #[test]
@@ -395,9 +780,45 @@ mod tests {
         // should still go above the topmost remaining (y=620), not
         // refill the gap.
         let popups = vec![fake_handle(900.0), fake_handle(620.0)];
-        let pos = compute_position(&popups, Some((1000.0, 1040.0)), PopupPosition::Tray);
         // y: 620 - 132 - 8 = 480
-        assert!((pos.1 - 480.0).abs() < 0.1);
+        assert!((stack_next(&popups, 900.0, true).1 - 480.0).abs() < 0.1);
+    }
+
+    /// Stacking must not walk popups off the screen.
+    ///
+    /// Downward from y=48 the eighth popup would start at 1028 and end at
+    /// 1160, past a 1040 work-area bottom. It is pinned to the last row that
+    /// fits instead. Popups overlap there — see `stacked_position`.
+    #[test]
+    fn stacking_is_clamped_to_the_work_area() {
+        let mut handles: Vec<PopupHandle> = Vec::new();
+        let mut last = 48.0;
+        for _ in 0..12 {
+            let pos = stacked_position((840.0, 48.0), &handles, false, &fake_work(), TRAY_GAP);
+            last = pos.1;
+            assert!(
+                last + POPUP_HEIGHT <= fake_work().bottom,
+                "popup ran off the bottom at y={last}"
+            );
+            handles.push(fake_handle(last));
+        }
+        // Saturated at the last fitting row: 1040 - 132 - 8 = 900.
+        assert!((last - 900.0).abs() < 0.1, "{last}");
+    }
+
+    /// The mirror case: stacking upward must not leave the top.
+    #[test]
+    fn upward_stacking_is_clamped_to_the_work_area() {
+        let mut handles: Vec<PopupHandle> = Vec::new();
+        for _ in 0..12 {
+            let pos = stacked_position((840.0, 900.0), &handles, true, &fake_work(), TRAY_GAP);
+            assert!(
+                pos.1 >= fake_work().top,
+                "popup left the top at y={}",
+                pos.1
+            );
+            handles.push(fake_handle(pos.1));
+        }
     }
 
     fn anchor_for_test(position: PopupPosition) -> (f32, f32) {
@@ -447,7 +868,7 @@ mod tests {
         // top_left first popup at (16, 16); second should land at
         // y = 16 + 132 + 8 = 156.
         let first = fake_handle(16.0);
-        let pos = compute_position(&[first], None, PopupPosition::TopLeft);
+        let pos = stacked_position((16.0, 16.0), &[first], false, &fake_work(), EDGE_GAP);
         assert!((pos.1 - 156.0).abs() < 1.0, "{pos:?}");
     }
 
@@ -456,7 +877,7 @@ mod tests {
         // bottom_right first popup with top = 892; second at
         // y = 892 - 132 - 8 = 752.
         let first = fake_handle(892.0);
-        let pos = compute_position(&[first], None, PopupPosition::BottomRight);
+        let pos = stacked_position((1584.0, 892.0), &[first], true, &fake_work(), EDGE_GAP);
         assert!((pos.1 - 752.0).abs() < 1.0, "{pos:?}");
     }
 }

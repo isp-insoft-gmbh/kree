@@ -672,7 +672,7 @@ impl App {
                         );
                         continue;
                     }
-                    let anchor = self.tray.rect_anchor();
+                    let anchor = self.tray.icon_rect();
                     let mode = self.effective_theme();
                     let position =
                         popup::compute_position(&self.popups, anchor, self.config.popup_position);
