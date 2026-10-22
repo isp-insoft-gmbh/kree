@@ -237,6 +237,20 @@ Per `ReminderEvent`:
 
 - Opened from tray left-click or "Edit Reminders" menu (the latter also opens the editor).
 - Closing the window hides to tray. Does not quit. Quit only via tray menu.
+  **Hidden to tray means no egui pass runs**, so anything driven from
+  `App::ui` stops happening: eframe only runs a pass when the root viewport is
+  visible or one of its child viewports is, and a tray app with no popup open
+  satisfies neither. Channel draining therefore belongs in `App::logic`, which
+  eframe calls on every pass regardless of visibility and before `App::ui` in
+  the same pass. A popup is a deferred child viewport and can only be created
+  from inside a pass, so opening one while hidden also needs an explicit
+  `ViewportCommand::RequestPaintWhileHidden` — otherwise the popup that would
+  make the viewport visible is blocked by the very pass it would unblock.
+  Draining from `ui` instead left reminders queued until a tray click woke the
+  loop, by which point they had often passed the staleness cutoff and were
+  dropped unseen. Not reproducible in silent autostart: `ViewportInfo::visible()`
+  is `None` until the window has been shown once, and eframe reads that as
+  visible.
 - Contents:
   - Table: schedule | message | icon | next fire time | last fired
   - Buttons: **Edit Reminders**, **Reload**, **Pause / Resume**
