@@ -12,6 +12,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
 };
 
+use tracing::{info, warn};
+
 use crate::UiFire;
 use crate::config::PopupPosition;
 use crate::theme::ThemeMode;
@@ -236,11 +238,27 @@ pub fn compute_position(
             Some(icon) => {
                 let work = work_area_for_icon(&icon);
                 let (base, stack_up) = tray_placement(&icon, &work);
+                // The placement is derived entirely from these two rects, so
+                // when a popup lands somewhere wrong they are the only things
+                // worth seeing. Both come from Win32 and neither is visible
+                // on a developer's machine without the taskbar moved.
+                info!(
+                    icon = ?icon,
+                    work = ?work,
+                    edge = ?taskbar_edge(&icon, &work),
+                    base = ?base,
+                    "tray popup placement"
+                );
                 (work, base, stack_up, TRAY_GAP)
             }
             None => {
                 let work = primary_work_area();
                 let base = fallback_position_from(&work);
+                warn!(
+                    work = ?work,
+                    base = ?base,
+                    "tray icon reported no rect; using bottom-right fallback"
+                );
                 (work, base, true, TRAY_GAP)
             }
         },
