@@ -711,7 +711,7 @@ impl eframe::App for App {
                         );
                         continue;
                     }
-                    let anchor = self.tray.rect_anchor();
+                    let anchor = self.tray.icon_rect();
                     mode = self.effective_theme();
                     let position =
                         popup::compute_position(&self.popups, anchor, self.config.popup_position);
