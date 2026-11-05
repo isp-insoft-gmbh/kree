@@ -230,6 +230,16 @@ Per `ReminderEvent`:
   - Fire timestamp (small, muted)
   - Single **Dismiss** button
 - **Stacking:** when multiple popups are visible at once, stack them vertically upward. Each new popup's bottom edge sits 8px above the previous popup's top edge.
+- **At most 6 popups are visible at once.** Reminders that fire while all six
+  slots are taken queue in order and open as slots free up. Unbounded stacking
+  walked popups off the edge of the desktop; clamping them to the work area
+  kept them on screen but made each new one land on top of the last, so the
+  stack stopped conveying order. A queue keeps every reminder both visible and
+  ordered. Since popups auto-dismiss after 30s and a fire is only discarded
+  once it is older than the 90s staleness window, a queued reminder normally
+  waits well inside its own lifetime — but the staleness check is applied again
+  when it reaches the front, because waiting is itself a way to go stale.
+  Hardcoded, not configurable.
 - Auto-dismiss after 30 seconds. Hardcoded; not configurable.
 - Subtle fade in/out (egui `Animation` or manual lerp on alpha).
 
