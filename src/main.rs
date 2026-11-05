@@ -4,7 +4,7 @@
 // default console subsystem so `cargo run` shows stderr.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +28,21 @@ use kree::{
 };
 
 const STALE_FIRE_WINDOW: Duration = Duration::from_secs(90);
+
+/// How many reminders are shown at once. Further ones wait their turn.
+///
+/// Popups auto-dismiss after 30 s, so a queued reminder normally waits at most
+/// that long for a slot — comfortably inside `STALE_FIRE_WINDOW`, which is why
+/// queueing rarely costs anything. Hardcoded by design, like every other
+/// behaviour the spec declines to make configurable.
+const MAX_VISIBLE_POPUPS: usize = 6;
+
+/// A cap of zero would queue every reminder forever and show none, with
+/// nothing at runtime to complain about it.
+const _: () = assert!(
+    MAX_VISIBLE_POPUPS >= 1,
+    "the popup cap must admit at least one popup"
+);
 const DELIVERED_OCCURRENCE_RETENTION: chrono::Duration = chrono::Duration::days(1);
 
 type OccurrenceKey = (String, String, String, i64);
@@ -507,6 +522,8 @@ struct State {
     reload_tx: mpsc::UnboundedSender<()>,
     paused: Arc<AtomicBool>,
     popups: Vec<popup::PopupHandle>,
+    /// Reminders waiting for a free slot. See [`MAX_VISIBLE_POPUPS`].
+    pending: Pending,
     main_visible: bool,
     window_state: main_window::MainWindowState,
     reminders: Vec<parser::Reminder>,
@@ -597,6 +614,7 @@ impl App {
                 reload_tx,
                 paused,
                 popups: Vec::new(),
+                pending: Pending::default(),
                 main_visible: false,
                 window_state,
                 reminders: Vec::new(),
@@ -704,20 +722,9 @@ impl Inbox {
                         );
                         continue;
                     }
-                    let anchor = state.tray.icon_rect();
-                    let mode = state.effective_theme();
-                    let position =
-                        popup::compute_position(&state.popups, anchor, state.config.popup_position);
-                    info!(
-                        icon = %fire.icon,
-                        body = %fire.body,
-                        position = ?position,
-                        anchor = %state.config.popup_position.as_str(),
-                        "opening popup"
-                    );
-                    state
-                        .popups
-                        .push(popup::PopupHandle::new(fire, position, mode));
+                    // Queued rather than shown here: `State::promote_pending`
+                    // opens it as soon as a slot is free, usually at once.
+                    state.pending.push(fire);
                 }
                 UiMessage::Snapshot(SnapshotPayload { reminders, config }) => {
                     info!(
@@ -828,6 +835,7 @@ impl eframe::App for App {
     /// dropped without ever being shown.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.inbox.drain(&mut self.state, ctx);
+        self.state.promote_pending();
 
         // A popup is a deferred child viewport, so it can only be created from
         // inside an egui pass — but the pass is precisely what a hidden root
@@ -835,7 +843,7 @@ impl eframe::App for App {
         // exist yet. `RequestPaintWhileHidden` breaks that cycle: it makes
         // eframe treat this one pass as visible, so `ui` runs and spawns the
         // viewport. Once the popup is up it keeps the passes coming on its own.
-        if !self.state.popups.is_empty() {
+        if !self.state.popups.is_empty() || !self.state.pending.is_empty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
     }
@@ -846,6 +854,33 @@ impl eframe::App for App {
 }
 
 impl State {
+    /// Open popups for queued reminders while there is room for them.
+    ///
+    /// Runs every pass rather than only when a reminder arrives, because the
+    /// slot that frees up is freed by a popup being dismissed or expiring —
+    /// which happens in the render path, with nothing to announce it.
+    fn promote_pending(&mut self) {
+        while self.popups.len() < MAX_VISIBLE_POPUPS {
+            let Some(fire) = self.pending.take_fresh(Local::now()) else {
+                break;
+            };
+            let anchor = self.tray.icon_rect();
+            let mode = self.effective_theme();
+            let position =
+                popup::compute_position(&self.popups, anchor, self.config.popup_position);
+            info!(
+                icon = %fire.icon,
+                body = %fire.body,
+                position = ?position,
+                anchor = %self.config.popup_position.as_str(),
+                still_queued = self.pending.len(),
+                "opening popup"
+            );
+            self.popups
+                .push(popup::PopupHandle::new(fire, position, mode));
+        }
+    }
+
     fn apply_theme_if_needed(&mut self, ctx: &egui::Context, mode: ThemeMode) {
         if self.applied_theme == Some(mode) {
             return;
@@ -888,9 +923,60 @@ impl State {
 
         self.popups.retain_mut(|popup| popup.show(&ctx));
 
-        if !self.popups.is_empty() {
+        // Keep ticking while anything is queued, not just while something is
+        // on screen. The queue drains on the next pass after a slot frees, and
+        // the last popup closing is exactly when a slot frees — gate this on
+        // `popups` alone and that pass never comes, stranding the rest.
+        if !self.popups.is_empty() || !self.pending.is_empty() {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
+    }
+}
+
+/// Reminders that fired while every popup slot was taken.
+///
+/// Letting them pile onto the screen was the alternative, and the popups then
+/// walked off the edge of the desktop; clamping stopped that but made each new
+/// reminder land exactly on top of the last, so the stack stopped meaning
+/// anything. Holding them here keeps every reminder both visible and in order.
+#[derive(Default)]
+struct Pending {
+    queue: VecDeque<UiFire>,
+}
+
+impl Pending {
+    fn push(&mut self, fire: UiFire) {
+        self.queue.push_back(fire);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// The next reminder still worth showing, oldest first.
+    ///
+    /// A reminder that aged past `STALE_FIRE_WINDOW` while it waited is dropped
+    /// rather than shown late — the same judgement the fire path already makes,
+    /// applied again here because waiting is itself a way to go stale. Dropping
+    /// clears `visible` so anything still keyed off this fire gives up too.
+    fn take_fresh(&mut self, now: DateTime<Local>) -> Option<UiFire> {
+        while let Some(fire) = self.queue.pop_front() {
+            if fire_is_stale(fire.fired_at, now) {
+                fire.visible.store(false, Ordering::Release);
+                warn!(
+                    body = %fire.body,
+                    fired_at = %fire.fired_at,
+                    "dropping queued reminder that aged out waiting for a slot"
+                );
+                continue;
+            }
+            return Some(fire);
+        }
+        None
     }
 }
 
@@ -903,6 +989,75 @@ fn fire_is_stale(fired_at: DateTime<Local>, now: DateTime<Local>) -> bool {
 #[cfg(test)]
 mod theme_decoder_tests {
     use super::*;
+
+    fn fire_at(body: &str, fired_at: DateTime<Local>) -> UiFire {
+        UiFire {
+            icon: "🔔".into(),
+            body: body.into(),
+            fired_at,
+            visible: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Order is the whole reason for queueing rather than overlapping.
+    #[test]
+    fn queued_reminders_surface_oldest_first() {
+        let now = Local::now();
+        let mut pending = Pending::default();
+        for body in ["first", "second", "third"] {
+            pending.push(fire_at(body, now));
+        }
+
+        let order: Vec<String> = std::iter::from_fn(|| pending.take_fresh(now))
+            .map(|f| f.body)
+            .collect();
+
+        assert_eq!(order, ["first", "second", "third"]);
+        assert!(pending.is_empty());
+    }
+
+    /// Waiting is itself a way to go stale: a reminder held behind a full
+    /// screen for longer than the cutoff is dropped, not shown late.
+    #[test]
+    fn a_reminder_that_ages_out_while_queued_is_dropped() {
+        let now = Local::now();
+        let long_ago = now
+            - chrono::Duration::from_std(STALE_FIRE_WINDOW).unwrap()
+            - chrono::Duration::seconds(1);
+
+        let mut pending = Pending::default();
+        let stale = fire_at("stale", long_ago);
+        let flag = Arc::clone(&stale.visible);
+        pending.push(stale);
+
+        assert!(pending.take_fresh(now).is_none());
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "dropping must clear `visible` so nothing else still acts on the fire"
+        );
+    }
+
+    /// Dropping a stale one must not swallow what was behind it.
+    #[test]
+    fn a_fresh_reminder_behind_a_stale_one_still_surfaces() {
+        let now = Local::now();
+        let long_ago = now
+            - chrono::Duration::from_std(STALE_FIRE_WINDOW).unwrap()
+            - chrono::Duration::seconds(1);
+
+        let mut pending = Pending::default();
+        pending.push(fire_at("stale", long_ago));
+        pending.push(fire_at("fresh", now));
+
+        let surfaced = pending.take_fresh(now).expect("fresh one should surface");
+        assert_eq!(surfaced.body, "fresh");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn an_empty_queue_yields_nothing() {
+        assert!(Pending::default().take_fresh(Local::now()).is_none());
+    }
 
     #[test]
     fn one_means_light() {
