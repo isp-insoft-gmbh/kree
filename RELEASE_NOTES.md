@@ -1,39 +1,28 @@
 ## Fixes
 
-- **Reminders now appear while kree sits in the tray.** A reminder that
-  fired after the main window had been opened and then closed did not show
-  up: it waited in the queue until something else woke the app — clicking
-  the tray icon, usually — and if it had aged past the 30-second staleness
-  cutoff by then, it was discarded without ever being shown. If you have
-  been missing reminders, this is why.
-- **The popup goes beside the taskbar wherever the taskbar is.** With the
-  taskbar docked left, most of the popup was off the left edge of the
-  screen; docked right or on top it ran off those edges instead. The side
-  is now worked out from the tray icon's position, so all four dockings
-  place the reminder correctly.
-- **Reminders land on the display the tray is on.** With the taskbar on a
-  secondary monitor the popup could appear on the primary one, nowhere near
-  the tray.
-- **A burst of reminders stays on screen.** Stacked popups no longer walk
-  off the edge of the desktop once enough of them are open at the same
-  time; they come to rest at the last fully visible slot instead.
-- **Popups opened while hidden now auto-dismiss.** They were kept alive by
-  the same mechanism that failed to show them, so they would have stayed up
-  indefinitely.
+- **A burst of reminders no longer buries itself.** When several fired at
+  once they stacked up the screen, and past a certain number each new one
+  landed on top of the last — so the ones underneath were unreachable. At
+  most six are now shown at a time; the rest wait their turn and open as
+  earlier ones are dismissed or expire. One that has been waiting longer
+  than the 90-second staleness window is dropped rather than shown late.
 
 ## Internal
 
-- The log now records the tray icon rect, the desktop work area and the
-  inferred taskbar edge whenever a reminder is placed, so a popup that
-  lands somewhere wrong can be diagnosed from the log alone.
-- Dependency updates: eframe 0.37, tray-icon 0.26, rodio 0.23, croner
-  4.0.1, plus assorted patch bumps.
+- The channels that feed the UI now live in a type the rendering code
+  cannot reach. The bug fixed in rc6 — reminders not appearing while kree
+  sat in the tray — came from draining those channels in the wrong place,
+  and nothing but a comment stopped that from being undone. It is now a
+  compile error.
+- Previous release notes said reminders are discarded after 30 seconds.
+  That is how long a popup stays on screen; the cutoff for discarding one
+  that never got shown is 90 seconds.
 
 ## Testing this build
 
-The two main fixes need a particular setup to see:
+Both rc6 fixes are confirmed working, so this release is mainly about the
+burst behaviour:
 
-- For the taskbar fix, move the Windows taskbar to the left, right or top
-  edge and wait for a reminder.
-- For the tray fix, **open the main window and close it with the X**, then
-  wait for a reminder. Starting kree silently at login never showed the bug.
+- Set several reminders to the same minute — more than six — and check
+  that none of them is lost or hidden behind another, and that the later
+  ones appear as the earlier ones go away.
