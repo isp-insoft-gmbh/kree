@@ -68,6 +68,7 @@ jobs:
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
+          name: ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
           prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
