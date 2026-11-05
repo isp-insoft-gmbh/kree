@@ -480,9 +480,30 @@ fn load_reminders(path: &std::path::Path) -> Vec<parser::Reminder> {
     }
 }
 
-struct App {
-    tray: tray::Tray,
+/// The channels that feed the UI, and nothing else.
+///
+/// Kept out of [`State`] so that the rendering path cannot reach them. Draining
+/// has to happen in [`eframe::App::logic`], because eframe runs no egui pass —
+/// and so never calls [`eframe::App::ui`] — while the root viewport is hidden
+/// and no popup is open, which for a tray app is nearly always. That was once a
+/// convention, and a refactor quietly moved the drains into `ui`; reminders
+/// then sat unseen until a tray click woke the loop, often aging past the
+/// staleness cutoff and being dropped. `State::render` has no field holding a
+/// receiver, so making that mistake again does not compile.
+struct Inbox {
     ui_rx: mpsc::UnboundedReceiver<UiMessage>,
+    /// Tray menu events are forwarded into this channel by a callback we
+    /// install on `MenuEvent::set_event_handler`. The callback also calls
+    /// `Context::request_repaint`, which is what gets the eframe loop to run a
+    /// pass at all while the root viewport is hidden.
+    menu_rx: mpsc::UnboundedReceiver<MenuEvent>,
+    /// Tray icon click events arrive via the same custom-handler trick.
+    tray_event_rx: mpsc::UnboundedReceiver<TrayIconEvent>,
+}
+
+/// Everything the window renders from, and everything the drains write to.
+struct State {
+    tray: tray::Tray,
     reload_tx: mpsc::UnboundedSender<()>,
     paused: Arc<AtomicBool>,
     popups: Vec<popup::PopupHandle>,
@@ -496,14 +517,11 @@ struct App {
     last_fired: HashMap<String, DateTime<Local>>,
     applied_theme: Option<ThemeMode>,
     shutting_down: bool,
-    /// Tray menu events are forwarded into this channel by a callback we
-    /// install on `MenuEvent::set_event_handler`. The callback also calls
-    /// `Context::request_repaint`, which is the only way to wake the
-    /// eframe loop while the root viewport is hidden — without it,
-    /// `App::ui` never runs and Quit clicks pile up unread.
-    menu_rx: mpsc::UnboundedReceiver<MenuEvent>,
-    /// Tray icon click events arrive via the same custom-handler trick.
-    tray_event_rx: mpsc::UnboundedReceiver<TrayIconEvent>,
+}
+
+struct App {
+    inbox: Inbox,
+    state: State,
 }
 
 impl App {
@@ -569,24 +587,30 @@ impl App {
         runtime_handle.spawn(watch_ctrl_c(ctx.clone(), ui_tx));
 
         Ok(Self {
-            tray,
-            ui_rx,
-            reload_tx,
-            paused,
-            popups: Vec::new(),
-            main_visible: false,
-            window_state,
-            reminders: Vec::new(),
-            config: config::Config::default(),
-            system_is_light: read_apps_use_light_theme(),
-            last_fired: HashMap::new(),
-            applied_theme: None,
-            shutting_down: false,
-            menu_rx,
-            tray_event_rx,
+            inbox: Inbox {
+                ui_rx,
+                menu_rx,
+                tray_event_rx,
+            },
+            state: State {
+                tray,
+                reload_tx,
+                paused,
+                popups: Vec::new(),
+                main_visible: false,
+                window_state,
+                reminders: Vec::new(),
+                config: config::Config::default(),
+                system_is_light: read_apps_use_light_theme(),
+                last_fired: HashMap::new(),
+                applied_theme: None,
+                shutting_down: false,
+            },
         })
     }
+}
 
+impl State {
     fn effective_theme(&self) -> ThemeMode {
         match self.config.theme {
             config::ThemeChoice::Dark => ThemeMode::Dark,
@@ -650,15 +674,23 @@ impl App {
         }
     }
 
+    fn request_shutdown(&mut self, ctx: &egui::Context) {
+        if self.shutting_down {
+            return;
+        }
+        self.shutting_down = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.request_repaint();
+    }
+}
+
+impl Inbox {
     /// Drain every channel that feeds the UI, and act on what arrives.
     ///
-    /// This runs from [`eframe::App::logic`] rather than `App::ui` because
-    /// eframe runs no egui pass at all while the root viewport is hidden —
-    /// which, for a tray app, is almost always. Draining here used to happen
-    /// in `ui`, so a reminder that fired while the window was hidden sat in
-    /// the channel until a tray click brought the loop back to life; by then
-    /// it had often gone stale and was dropped unseen.
-    fn drain_channels(&mut self, ctx: &egui::Context) {
+    /// Called from [`eframe::App::logic`], which eframe runs on every pass
+    /// whether or not anything is visible, and before [`eframe::App::ui`] in
+    /// the same pass. See [`Inbox`] for why it cannot live in the render path.
+    fn drain(&mut self, state: &mut State, ctx: &egui::Context) {
         // Drain UI messages from the tokio side.
         while let Ok(msg) = self.ui_rx.try_recv() {
             match msg {
@@ -672,18 +704,19 @@ impl App {
                         );
                         continue;
                     }
-                    let anchor = self.tray.icon_rect();
-                    let mode = self.effective_theme();
+                    let anchor = state.tray.icon_rect();
+                    let mode = state.effective_theme();
                     let position =
-                        popup::compute_position(&self.popups, anchor, self.config.popup_position);
+                        popup::compute_position(&state.popups, anchor, state.config.popup_position);
                     info!(
                         icon = %fire.icon,
                         body = %fire.body,
                         position = ?position,
-                        anchor = %self.config.popup_position.as_str(),
+                        anchor = %state.config.popup_position.as_str(),
                         "opening popup"
                     );
-                    self.popups
+                    state
+                        .popups
                         .push(popup::PopupHandle::new(fire, position, mode));
                 }
                 UiMessage::Snapshot(SnapshotPayload { reminders, config }) => {
@@ -695,22 +728,22 @@ impl App {
                         theme = config.theme.as_str(),
                         "main window snapshot updated"
                     );
-                    self.reminders = reminders;
-                    self.config = config;
-                    let mode = self.effective_theme();
-                    self.apply_theme_if_needed(ctx, mode);
+                    state.reminders = reminders;
+                    state.config = config;
+                    let mode = state.effective_theme();
+                    state.apply_theme_if_needed(ctx, mode);
                 }
                 UiMessage::LastFired { schedule, at } => {
-                    self.last_fired.insert(schedule, at);
+                    state.last_fired.insert(schedule, at);
                 }
                 UiMessage::Shutdown => {
-                    self.request_shutdown(ctx);
+                    state.request_shutdown(ctx);
                 }
                 UiMessage::SystemThemeChanged(is_light) => {
                     info!(is_light, "system theme changed");
-                    self.system_is_light = is_light;
-                    let mode = self.effective_theme();
-                    self.apply_theme_if_needed(ctx, mode);
+                    state.system_is_light = is_light;
+                    let mode = state.effective_theme();
+                    state.apply_theme_if_needed(ctx, mode);
                 }
             }
         }
@@ -720,9 +753,9 @@ impl App {
             let id = menu_event.id();
             match classify_tray_menu_id(
                 id,
-                &self.tray.quit_id,
-                &self.tray.edit_id,
-                &self.tray.log_id,
+                &state.tray.quit_id,
+                &state.tray.edit_id,
+                &state.tray.log_id,
             ) {
                 TrayMenuAction::Quit => {
                     info!("Quit menu clicked; exiting");
@@ -750,23 +783,14 @@ impl App {
                 ..
             } = tray_event
             {
-                self.main_visible = !self.main_visible;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.main_visible));
-                if self.main_visible {
+                state.main_visible = !state.main_visible;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(state.main_visible));
+                if state.main_visible {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 ctx.request_repaint();
             }
         }
-    }
-
-    fn request_shutdown(&mut self, ctx: &egui::Context) {
-        if self.shutting_down {
-            return;
-        }
-        self.shutting_down = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        ctx.request_repaint();
     }
 }
 
@@ -786,7 +810,7 @@ impl eframe::App for App {
         // our `theme::apply` ran. Pin the swap-chain clear directly to
         // our nugu palettes so a hidden-then-shown light viewport
         // doesn't briefly flash dark.
-        let bg = match self.effective_theme() {
+        let bg = match self.state.effective_theme() {
             ThemeMode::Dark => egui::Color32::from_rgb(0x24, 0x24, 0x24),
             ThemeMode::Light => egui::Color32::from_rgb(0xdb, 0xdb, 0xdb),
         };
@@ -803,7 +827,7 @@ impl eframe::App for App {
     /// loop, and ones that had aged past the staleness cutoff by then were
     /// dropped without ever being shown.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain_channels(ctx);
+        self.inbox.drain(&mut self.state, ctx);
 
         // A popup is a deferred child viewport, so it can only be created from
         // inside an egui pass — but the pass is precisely what a hidden root
@@ -811,12 +835,29 @@ impl eframe::App for App {
         // exist yet. `RequestPaintWhileHidden` breaks that cycle: it makes
         // eframe treat this one pass as visible, so `ui` runs and spawns the
         // viewport. Once the popup is up it keeps the passes coming on its own.
-        if !self.popups.is_empty() {
+        if !self.state.popups.is_empty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.state.render(ui);
+    }
+}
+
+impl State {
+    fn apply_theme_if_needed(&mut self, ctx: &egui::Context, mode: ThemeMode) {
+        if self.applied_theme == Some(mode) {
+            return;
+        }
+        theme::apply(ctx, mode);
+        self.applied_theme = Some(mode);
+    }
+
+    /// Draw the window and drive the popups.
+    ///
+    /// Takes no `Inbox`, so it cannot drain a channel — see that type.
+    fn render(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let mode = self.effective_theme();
         self.apply_theme_if_needed(&ctx, mode);
@@ -850,16 +891,6 @@ impl eframe::App for App {
         if !self.popups.is_empty() {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
-    }
-}
-
-impl App {
-    fn apply_theme_if_needed(&mut self, ctx: &egui::Context, mode: ThemeMode) {
-        if self.applied_theme == Some(mode) {
-            return;
-        }
-        theme::apply(ctx, mode);
-        self.applied_theme = Some(mode);
     }
 }
 

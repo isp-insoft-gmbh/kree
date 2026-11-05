@@ -250,7 +250,9 @@ Per `ReminderEvent`:
   loop, by which point they had often passed the staleness cutoff and were
   dropped unseen. Not reproducible in silent autostart: `ViewportInfo::visible()`
   is `None` until the window has been shown once, and eframe reads that as
-  visible.
+  visible. The receivers therefore live in `Inbox`, which only `App::logic`
+  holds, while the render path is handed `State` — so draining from `ui` is a
+  compile error rather than a rule someone has to remember.
 - Contents:
   - Table: schedule | message | icon | next fire time | last fired
   - Buttons: **Edit Reminders**, **Reload**, **Pause / Resume**
